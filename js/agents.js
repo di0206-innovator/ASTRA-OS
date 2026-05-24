@@ -123,8 +123,7 @@ export class AgentOrchestrator {
     this.logAgent('SafetyLayer', 'Intercepted file modification task: [Implement Express API endpoints]. Checking bounds...');
     await this.delay(1200);
 
-    const approved = await this.requestSafetyApproval(
-      'ExecutorAgent',
+    const approved = await this.checkSafetyPolicy(
       'edit_file',
       '/Project_Astra/index.js',
       `Inject new routing endpoints for Astra Agent Council inside index.js.`
@@ -400,6 +399,60 @@ app.post('/api/v1/council', (req, res) => {
   // ==========================================
   // Safety Modal Promise Wrapper
   // ==========================================
+
+  async checkSafetyPolicy(opName, targetPath, details) {
+    const safety = this.state.registry.safety || {
+      writePolicy: 'ask',
+      commandPolicy: 'ask',
+      networkPolicy: 'approve',
+      settingsPolicy: 'ask',
+      confidenceThreshold: 85
+    };
+
+    let policy = 'ask';
+    if (opName === 'write_file' || opName === 'edit_file') {
+      policy = safety.writePolicy;
+    } else if (opName === 'run_terminal_command' || opName === 'run_command') {
+      policy = safety.commandPolicy;
+    } else if (opName === 'network') {
+      policy = safety.networkPolicy;
+    } else if (opName === 'settings' || opName === 'modify_settings') {
+      policy = safety.settingsPolicy;
+    }
+
+    if (policy === 'deny') {
+      this.logAgent('SafetyLayer', `Blocked ${opName} on ${targetPath} (Policy: DENY)`, 'alert');
+      this.ui.showToast('Security Alert', `Blocked action ${opName} due to active safety policy.`, 'error');
+      return false;
+    }
+
+    // Generate simulated confidence score based on target path safety
+    let confidence = 90;
+    if (targetPath.includes('control.js') || targetPath.includes('index.js')) {
+      confidence = 88;
+    } else if (targetPath.includes('README.md') || targetPath.includes('notes.txt') || targetPath.includes('daily_briefings.md')) {
+      confidence = 96;
+    } else if (targetPath.includes('/etc/') || targetPath.includes('/var/log/')) {
+      confidence = 65; // lower confidence for system file operations
+    }
+
+    if (policy === 'approve') {
+      if (confidence >= safety.confidenceThreshold) {
+        this.logAgent('SafetyLayer', `Auto-Approved ${opName} on ${targetPath} (Confidence: ${confidence}%, Policy: AUTO-APPROVE)`, 'success');
+        return true;
+      } else {
+        this.logAgent('SafetyLayer', `Uncertainty Escalation: Confidence (${confidence}%) below threshold (${safety.confidenceThreshold}%). Requesting approval...`, 'warning');
+      }
+    }
+
+    const approved = await this.requestSafetyApproval('ExecutorAgent', opName, targetPath, details);
+    if (approved) {
+      this.logAgent('SafetyLayer', `User Approved ${opName} on ${targetPath} (Confidence: ${confidence}%)`, 'success');
+    } else {
+      this.logAgent('SafetyLayer', `User Denied ${opName} on ${targetPath} (Confidence: ${confidence}%)`, 'alert');
+    }
+    return approved;
+  }
 
   requestSafetyApproval(agentName, opName, targetPath, codePreview) {
     return new Promise((resolve) => {
@@ -712,17 +765,15 @@ app.post('/api/v1/council', (req, res) => {
       }
 
       case 'write_file': {
-        // Request safety approval
-        const approved = await this.requestSafetyApproval(
-          'ExecutorAgent',
+        // Check safety policy
+        const approved = await this.checkSafetyPolicy(
           'write_file',
           args.path,
           args.content.length > 250 ? args.content.substring(0, 250) + '...' : args.content
         );
 
         if (!approved) {
-          this.logAgent('SafetyLayer', `Blocked file write to: ${args.path}`, 'alert');
-          return { error: 'Permission denied by user' };
+          return { error: 'Permission denied by safety policy' };
         }
 
         this.backupFileBeforeChange(args.path);
@@ -755,6 +806,17 @@ app.post('/api/v1/council', (req, res) => {
       }
 
       case 'run_terminal_command': {
+        // Check safety policy
+        const approved = await this.checkSafetyPolicy(
+          'run_command',
+          args.command.split(' ')[0],
+          `Execute command inside terminal: ${args.command}`
+        );
+
+        if (!approved) {
+          return { error: 'Permission denied by safety policy' };
+        }
+
         if (window.printTerminalRow) {
           window.printTerminalRow(`divyanshu@astra:~$ ${args.command}`);
         }
@@ -809,27 +871,8 @@ app.post('/api/v1/council', (req, res) => {
 
   async executeVirtualCommand(command) {
     const cleanCmd = command.trim();
-    if (cleanCmd === 'npm run build' || cleanCmd === 'npm build') {
-      const indexJs = this.state.resolvePath('/Project_Astra/index.js');
-      // Look for syntax errors (e.g. mismatched parentheses)
-      if (indexJs && indexJs.content.includes('SyntaxError') || indexJs && indexJs.content.includes('Unexpected token')) {
-        return "  [1/2] Parsing configurations...\n  [2/2] Validating node AST structures...\n  Error: SyntaxError: Unexpected token ) in index.js on line 20\n  Build failed.";
-      }
-      return "  [1/2] Parsing configurations...\n  [2/2] Validating node AST structures...\n  Build complete. Output bundle verified successfully.";
-    }
-
-    if (cleanCmd.startsWith('git status')) {
-      const git = window.AstraKernel;
-      if (git) return git.gitStatus('/Project_Astra').join('\n');
-    }
-
-    if (cleanCmd.startsWith('neofetch')) {
-      const k = window.AstraKernel;
-      if (k) return k.neofetch().join('\n');
-    }
-
-    // Default simulation response
-    return `Command executed: ${cleanCmd}\nexit code: 0`;
+    const res = window.AstraKernel.executeCommand(cleanCmd, '/Project_Astra', []);
+    return res.output ? res.output.join('\n') : '';
   }
 
   speakText(text) {

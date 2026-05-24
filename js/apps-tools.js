@@ -255,6 +255,11 @@ window.AstraApps.appstore = function(container, ui) {
           if (result.success) {
             ui.showToast('Package Installed', `${name} has been installed successfully.`, 'success');
             ui.state.addNotification('success', 'App Store', `Installed ${name}`);
+            if (name === 'astroid') {
+              ui.addDockShortcut('astroid', 'Astro Defender Game', '🎮');
+            } else if (name === 'pulsewave') {
+              ui.addDockShortcut('pulsewave', 'PulseWave Ambient Player', '🎵');
+            }
           }
           render();
         }, 1500);
@@ -267,7 +272,7 @@ window.AstraApps.appstore = function(container, ui) {
       neofetch: '🖥', cowsay: '🐄', fortune: '🔮', htop: '📊', git: '🔀', python: '🐍', gcc: '⚙',
       vim: '📝', nano: '📄', wget: '⬇', tree: '🌳', sl: '🚂', figlet: '🔤', lolcat: '🌈',
       bat: '🦇', jq: '📋', fzf: '🔍', tmux: '🪟', nmap: '🗺', whois: '🔎', curl: '🔗',
-      nodejs: '💚', npm: '📦'
+      nodejs: '💚', npm: '📦', astroid: '🎮', pulsewave: '🎵'
     };
     return Reflect.get(icons, name) || '📦';
   }
@@ -1054,3 +1059,959 @@ window.AstraApps.timeline = function(container, ui) {
 
   render();
 };
+
+window.AstraApps.astroid = function(container, ui) {
+  window.renderSafeHTML(container, html`
+    <div class="astroid-app">
+      <div class="astroid-header">
+        <div class="astroid-stat">Score: <span id="astroid-score">0</span></div>
+        <div class="astroid-stat">Level: <span id="astroid-level">1</span></div>
+        <div class="astroid-stat">Lives: <span id="astroid-lives">3</span></div>
+        <div class="astroid-stat">High Score: <span id="astroid-high">0</span></div>
+      </div>
+      <div class="astroid-canvas-container" style="position: relative; width: 560px; height: 280px; margin: 0 auto; background: #080b11; border: 1px solid var(--border-glass); border-radius: 6px; overflow: hidden;">
+        <canvas id="astroid-canvas" width="560" height="280" tabindex="0" style="display: block; outline: none; width: 100%; height: 100%;"></canvas>
+        <div id="astroid-overlay" class="astroid-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(8, 11, 17, 0.85); backdrop-filter: blur(4px); color: #fff; text-align: center; box-sizing: border-box; padding: 20px;">
+          <h2 id="astroid-overlay-title" style="margin: 0 0 10px 0; font-family: sans-serif; font-size: 24px; font-weight: 800; color: var(--color-primary); text-shadow: 0 0 8px var(--color-primary); letter-spacing: 2px;">ASTRO DEFENDER</h2>
+          <p id="astroid-overlay-desc" style="margin: 0 0 20px 0; font-size: 13px; color: var(--text-secondary); max-width: 400px; line-height: 1.4;">Protect the system filesystem from corrupted sectors! Click below to start.</p>
+          <button id="astroid-play-btn" class="btn btn-primary" style="padding: 8px 24px; font-weight: 600;">Start Defense</button>
+        </div>
+      </div>
+      <div class="astroid-instructions" style="text-align: center; margin-top: 10px; font-size: 11px; color: var(--text-muted);">
+        Controls: A/D or Left/Right Arrows to Move. Spacebar to Fire. Click canvas to focus keyboard.
+      </div>
+    </div>
+  `);
+
+  const canvas = container.querySelector('#astroid-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const overlay = container.querySelector('#astroid-overlay');
+  const playBtn = container.querySelector('#astroid-play-btn');
+  const titleEl = container.querySelector('#astroid-overlay-title');
+  const descEl = container.querySelector('#astroid-overlay-desc');
+
+  const scoreEl = container.querySelector('#astroid-score');
+  const levelEl = container.querySelector('#astroid-level');
+  const livesEl = container.querySelector('#astroid-lives');
+  const highEl = container.querySelector('#astroid-high');
+
+  let score = 0;
+  let level = 1;
+  let lives = 3;
+  let highscore = parseInt(localStorage.getItem('astra_astroid_highscore') || '0', 10);
+  highEl.textContent = highscore;
+
+  let isPlaying = false;
+  let loopId = null;
+
+  // Web Audio for retro sound FX
+  let audioCtx = null;
+  function initAudio() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+  }
+
+  function playLaserSound() {
+    if (!audioCtx) return;
+    try {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.12);
+    } catch (e) {}
+  }
+
+  function playExplosionSound(pitch = 100) {
+    if (!audioCtx) return;
+    try {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(pitch, audioCtx.currentTime);
+      osc.frequency.linearRampToValueAtTime(20, audioCtx.currentTime + 0.25);
+      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.25);
+    } catch (e) {}
+  }
+
+  // Entities state
+  const stars = [];
+  for (let i = 0; i < 30; i++) {
+    stars.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      size: Math.random() * 1.5 + 0.5,
+      speed: Math.random() * 0.4 + 0.1
+    });
+  }
+
+  let player = { x: canvas.width / 2, y: canvas.height - 25, w: 20, h: 16, speed: 5 };
+  let lasers = [];
+  let enemies = [];
+  let particles = [];
+  let keys = { left: false, right: false, space: false };
+  let lastFireTime = 0;
+  let fireInterval = 250;
+  let shakeTime = 0;
+  let waveSize = 5;
+  let enemySpeed = 0.8;
+
+  function spawnWave() {
+    enemies = [];
+    for (let i = 0; i < waveSize; i++) {
+      enemies.push({
+        x: Math.random() * (canvas.width - 40) + 20,
+        y: -Math.random() * 150 - 20,
+        w: 18,
+        h: 14,
+        speed: enemySpeed * (Math.random() * 0.4 + 0.8),
+        color: `hsl(${(level * 40) % 360}, 90%, 65%)`
+      });
+    }
+  }
+
+  function triggerExplosion(x, y, color) {
+    for (let i = 0; i < 8; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = Math.random() * 2 + 1;
+      particles.push({
+        x: x,
+        y: y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: Math.random() * 2 + 1,
+        color: color || '#ff5b5b',
+        alpha: 1,
+        decay: Math.random() * 0.03 + 0.02
+      });
+    }
+  }
+
+  canvas.addEventListener('keydown', (e) => {
+    if (!isPlaying) return;
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+    if (e.key === ' ' || e.key === 'Spacebar') {
+      keys.space = true;
+      e.preventDefault();
+    }
+  });
+
+  canvas.addEventListener('keyup', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+    if (e.key === ' ' || e.key === 'Spacebar') keys.space = false;
+  });
+
+  canvas.addEventListener('focus', () => {
+    canvas.style.borderColor = 'var(--color-primary)';
+  });
+  canvas.addEventListener('blur', () => {
+    canvas.style.borderColor = 'var(--border-glass)';
+    keys.left = false;
+    keys.right = false;
+    keys.space = false;
+  });
+
+  function startNewGame() {
+    initAudio();
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    score = 0;
+    level = 1;
+    lives = 3;
+    waveSize = 5;
+    enemySpeed = 0.8;
+    scoreEl.textContent = score;
+    levelEl.textContent = level;
+    livesEl.textContent = lives;
+
+    player.x = canvas.width / 2;
+    lasers = [];
+    particles = [];
+    spawnWave();
+
+    isPlaying = true;
+    overlay.style.display = 'none';
+    canvas.focus();
+    if (loopId) cancelAnimationFrame(loopId);
+    gameLoop();
+  }
+
+  function gameOver() {
+    isPlaying = false;
+    if (score > highscore) {
+      highscore = score;
+      localStorage.setItem('astra_astroid_highscore', highscore.toString());
+      highEl.textContent = highscore;
+      ui.showToast('New High Score!', `You protected the filesystem with a score of ${score}!`, 'success');
+    }
+    
+    titleEl.textContent = 'SYSTEM OVERRUN';
+    titleEl.style.color = '#ff5b5b';
+    titleEl.style.textShadow = '0 0 8px #ff5b5b';
+    descEl.textContent = `A sector has been corrupted. Final Score: ${score} (Level ${level})`;
+    playBtn.textContent = 'Reboot Defense';
+    overlay.style.display = 'flex';
+    if (loopId) cancelAnimationFrame(loopId);
+  }
+
+  function gameLoop() {
+    if (!container.offsetParent) {
+      isPlaying = false;
+      return;
+    }
+
+    update();
+    draw();
+
+    if (isPlaying) {
+      loopId = requestAnimationFrame(gameLoop);
+    }
+  }
+
+  function update() {
+    stars.forEach(s => {
+      s.y += s.speed;
+      if (s.y > canvas.height) {
+        s.y = 0;
+        s.x = Math.random() * canvas.width;
+      }
+    });
+
+    if (keys.left) player.x = Math.max(10, player.x - player.speed);
+    if (keys.right) player.x = Math.min(canvas.width - player.w - 10, player.x + player.speed);
+
+    if (keys.space) {
+      const now = Date.now();
+      if (now - lastFireTime > fireInterval) {
+        lasers.push({
+          x: player.x + player.w / 2 - 1,
+          y: player.y - 4,
+          w: 2,
+          h: 8,
+          speed: 7
+        });
+        lastFireTime = now;
+        playLaserSound();
+      }
+    }
+
+    for (let i = lasers.length - 1; i >= 0; i--) {
+      lasers[i].y -= lasers[i].speed;
+      if (lasers[i].y < 0) {
+        lasers.splice(i, 1);
+      }
+    }
+
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      e.y += e.speed;
+
+      if (
+        e.y + e.h >= player.y &&
+        e.y <= player.y + player.h &&
+        e.x + e.w >= player.x &&
+        e.x <= player.x + player.w
+      ) {
+        triggerExplosion(e.x + e.w / 2, e.y + e.h / 2, '#ff5b5b');
+        triggerExplosion(player.x + player.w / 2, player.y + player.h / 2, '#48bb78');
+        enemies.splice(i, 1);
+        lives--;
+        livesEl.textContent = lives;
+        shakeTime = 12;
+        playExplosionSound(60);
+
+        if (lives <= 0) {
+          gameOver();
+          return;
+        }
+        continue;
+      }
+
+      if (e.y > canvas.height) {
+        enemies.splice(i, 1);
+        lives--;
+        livesEl.textContent = lives;
+        shakeTime = 12;
+        playExplosionSound(50);
+        triggerExplosion(e.x + e.w / 2, canvas.height - 5, '#ff5b5b');
+
+        if (lives <= 0) {
+          gameOver();
+          return;
+        }
+        continue;
+      }
+
+      for (let j = lasers.length - 1; j >= 0; j--) {
+        const l = lasers[j];
+        if (
+          l.x + l.w >= e.x &&
+          l.x <= e.x + e.w &&
+          l.y + l.h >= e.y &&
+          l.y <= e.y + e.h
+        ) {
+          triggerExplosion(e.x + e.w / 2, e.y + e.h / 2, e.color);
+          playExplosionSound(180 + Math.random() * 40);
+          enemies.splice(i, 1);
+          lasers.splice(j, 1);
+          score += 10;
+          scoreEl.textContent = score;
+          break;
+        }
+      }
+    }
+
+    if (enemies.length === 0 && isPlaying) {
+      level++;
+      levelEl.textContent = level;
+      waveSize = 5 + level * 2;
+      enemySpeed = 0.8 + level * 0.15;
+      ui.showToast('Level Up!', `Sectors defense integrity reinforced. Level ${level} incoming.`, 'info');
+      spawnWave();
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.alpha -= p.decay;
+      if (p.alpha <= 0) {
+        particles.splice(i, 1);
+      }
+    }
+
+    if (shakeTime > 0) shakeTime--;
+  }
+
+  function draw() {
+    ctx.save();
+    
+    if (shakeTime > 0) {
+      const dx = (Math.random() - 0.5) * 6;
+      const dy = (Math.random() - 0.5) * 6;
+      ctx.translate(dx, dy);
+    }
+
+    ctx.fillStyle = '#080b11';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    stars.forEach(s => {
+      ctx.fillStyle = `rgba(255, 255, 255, ${s.speed * 1.5})`;
+      ctx.fillRect(s.x, s.y, s.size, s.size);
+    });
+
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = '#00f7ff';
+    ctx.fillStyle = '#00f7ff';
+    lasers.forEach(l => {
+      ctx.fillRect(l.x, l.y, l.w, l.h);
+    });
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = '#48bb78';
+    const flameH = Math.sin(Date.now() / 40) * 5 + 6;
+    ctx.fillStyle = '#f6ad55';
+    ctx.beginPath();
+    ctx.moveTo(player.x + player.w / 2 - 4, player.y + player.h);
+    ctx.lineTo(player.x + player.w / 2, player.y + player.h + flameH);
+    ctx.lineTo(player.x + player.w / 2 + 4, player.y + player.h);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#48bb78';
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = '#48bb78';
+    ctx.beginPath();
+    ctx.moveTo(player.x + player.w / 2, player.y);
+    ctx.lineTo(player.x, player.y + player.h);
+    ctx.lineTo(player.x + player.w, player.y + player.h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    enemies.forEach(e => {
+      ctx.fillStyle = e.color;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = e.color;
+      
+      ctx.beginPath();
+      ctx.moveTo(e.x + e.w / 2, e.y + e.h);
+      ctx.lineTo(e.x, e.y + e.h / 3);
+      ctx.lineTo(e.x + e.w / 4, e.y);
+      ctx.lineTo(e.x + (e.w * 3) / 4, e.y);
+      ctx.lineTo(e.x + e.w, e.y + e.h / 3);
+      ctx.closePath();
+      ctx.fill();
+      
+      ctx.fillStyle = '#fff';
+      ctx.shadowBlur = 0;
+      ctx.fillRect(e.x + e.w / 4 + 1, e.y + e.h / 3 + 1, 2, 2);
+      ctx.fillRect(e.x + (e.w * 3) / 4 - 3, e.y + e.h / 3 + 1, 2, 2);
+    });
+
+    particles.forEach(p => {
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = p.alpha;
+      ctx.fillRect(p.x, p.y, p.size, p.size);
+    });
+    ctx.globalAlpha = 1.0;
+
+    ctx.restore();
+  }
+
+  playBtn.addEventListener('click', startNewGame);
+};
+
+window.AstraApps.pulsewave = function(container, ui) {
+  window.renderSafeHTML(container, html`
+    <div class="pulsewave-app">
+      <div class="pulsewave-grid" style="display: grid; grid-template-columns: 240px 1fr; gap: 12px; height: 100%; min-height: 330px; box-sizing: border-box;">
+        
+        <div class="pulsewave-left-panel" style="display: flex; flex-direction: column; gap: 10px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass); border-radius: 6px; padding: 12px; box-sizing: border-box; justify-content: space-between;">
+          <div>
+            <h4 style="margin: 0 0 10px 0; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 6px; color: var(--color-primary);">Controls & Waveforms</h4>
+            
+            <div class="pulsewave-control-group" style="margin-bottom: 10px;">
+              <label style="display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Generator Mode</label>
+              <select id="pw-mode" class="browser-newtab-input" style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border-glass); border-radius: 4px; padding: 6px; color: #fff; font-size: 12px;">
+                <option value="synth">Polyphonic Synthesizer</option>
+                <option value="drone">Deep Space Ambient Drone</option>
+                <option value="cyber">Cyberpunk Rain Soundscape</option>
+                <option value="echo">Astra Echoes Pad</option>
+              </select>
+            </div>
+
+            <div class="pulsewave-control-group synth-only" style="margin-bottom: 10px;">
+              <label style="display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Oscillator Type</label>
+              <div style="display: flex; gap: 4px;">
+                <button class="btn btn-sm btn-outline active pw-wave-btn" data-wave="sine" style="flex: 1; font-size: 10px; padding: 4px 0; text-align: center;">Sine</button>
+                <button class="btn btn-sm btn-outline pw-wave-btn" data-wave="triangle" style="flex: 1; font-size: 10px; padding: 4px 0; text-align: center;">Tri</button>
+                <button class="btn btn-sm btn-outline pw-wave-btn" data-wave="sawtooth" style="flex: 1; font-size: 10px; padding: 4px 0; text-align: center;">Saw</button>
+                <button class="btn btn-sm btn-outline pw-wave-btn" data-wave="square" style="flex: 1; font-size: 10px; padding: 4px 0; text-align: center;">Sqr</button>
+              </div>
+            </div>
+
+            <div class="pulsewave-control-group synth-only" style="margin-bottom: 10px;">
+              <label style="display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">ADSR Envelope</label>
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                <div style="display: flex; align-items: center; gap: 6px; font-size: 10px;">
+                  <span style="width: 50px; color: var(--text-secondary);">Attack:</span>
+                  <input type="range" id="pw-attack" min="0.02" max="1" step="0.05" value="0.1" style="flex: 1; height: 4px; accent-color: var(--color-primary);">
+                  <span id="pw-attack-val" style="width: 25px; text-align: right;">0.1s</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; font-size: 10px;">
+                  <span style="width: 50px; color: var(--text-secondary);">Release:</span>
+                  <input type="range" id="pw-release" min="0.1" max="2.5" step="0.1" value="0.5" style="flex: 1; height: 4px; accent-color: var(--color-primary);">
+                  <span id="pw-release-val" style="width: 25px; text-align: right;">0.5s</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="pulsewave-control-group drone-only" style="display: none; margin-bottom: 10px;">
+              <label style="display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">LFO Rate Mod (<span id="pw-drone-intensity-val">0.5</span>Hz)</label>
+              <input type="range" id="pw-drone-intensity" min="0.1" max="3" step="0.1" value="0.5" style="width: 100%; height: 4px; accent-color: var(--color-primary);">
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <button id="pw-start-audio" class="btn btn-primary" style="width: 100%; font-size: 12px; padding: 8px; font-weight: 600;">🔊 Start Audio Engine</button>
+            <div id="pw-status" style="font-size: 11px; text-align: center; color: var(--text-muted); font-family: monospace;">Context: Suspended</div>
+          </div>
+        </div>
+        
+        <div class="pulsewave-right-panel" style="display: flex; flex-direction: column; gap: 10px; justify-content: space-between; box-sizing: border-box;">
+          <div class="pulsewave-visualizer-container" style="position: relative; flex: 1; background: #080b11; border: 1px solid var(--border-glass); border-radius: 6px; overflow: hidden; height: 160px; box-sizing: border-box;">
+            <canvas id="pulsewave-canvas" width="300" height="160" style="display: block; width: 100%; height: 100%;"></canvas>
+            <div id="pulsewave-wave-label" style="position: absolute; bottom: 8px; left: 8px; font-family: monospace; font-size: 10px; color: rgba(255,255,255,0.4); text-transform: uppercase;">Oscilloscope Waveform</div>
+          </div>
+
+          <div class="pulsewave-keyboard-container" style="background: rgba(0,0,0,0.15); border: 1px solid var(--border-glass); border-radius: 6px; padding: 10px; box-sizing: border-box;">
+            <div class="pulsewave-keyboard" id="pulsewave-keys" style="display: flex; justify-content: center; height: 80px; position: relative; user-select: none;">
+              <!-- Keys injected dynamically -->
+            </div>
+            <div style="text-align: center; font-size: 10px; color: var(--text-muted); margin-top: 6px; font-family: monospace;">
+              Controls: A S D F G H J K L on keyboard to play notes
+            </div>
+          </div>
+        </div>
+        
+      </div>
+    </div>
+  `);
+
+  const keysContainer = container.querySelector('#pulsewave-keys');
+  const canvas = container.querySelector('#pulsewave-canvas');
+  if (!canvas || !keysContainer) return;
+  const ctx = canvas.getContext('2d');
+
+  const pwMode = container.querySelector('#pw-mode');
+  const attackSlider = container.querySelector('#pw-attack');
+  const releaseSlider = container.querySelector('#pw-release');
+  const attackVal = container.querySelector('#pw-attack-val');
+  const releaseVal = container.querySelector('#pw-release-val');
+  const intensitySlider = container.querySelector('#pw-drone-intensity');
+  const intensityVal = container.querySelector('#pw-drone-intensity-val');
+  const startBtn = container.querySelector('#pw-start-audio');
+  const statusDiv = container.querySelector('#pw-status');
+
+  const synthControls = container.querySelectorAll('.synth-only');
+  const droneControls = container.querySelectorAll('.drone-only');
+
+  let audioCtx = null;
+  let analyser = null;
+  let masterGain = null;
+  let dataArray = null;
+  let bufferLength = 0;
+  let isRunning = false;
+  let oscType = 'sine';
+  let loopId = null;
+
+  const activeNotes = new Map();
+  const ambientNodes = [];
+
+  const notesMap = [
+    { note: 'C4', freq: 261.63, key: 'a', isBlack: false },
+    { note: 'C#4', freq: 277.18, key: 'w', isBlack: true },
+    { note: 'D4', freq: 293.66, key: 's', isBlack: false },
+    { note: 'D#4', freq: 311.13, key: 'e', isBlack: true },
+    { note: 'E4', freq: 329.63, key: 'd', isBlack: false },
+    { note: 'F4', freq: 349.23, key: 'f', isBlack: false },
+    { note: 'F#4', freq: 369.99, key: 't', isBlack: true },
+    { note: 'G4', freq: 392.00, key: 'g', isBlack: false },
+    { note: 'G#4', freq: 415.30, key: 'y', isBlack: true },
+    { note: 'A4', freq: 440.00, key: 'h', isBlack: false },
+    { note: 'A#4', freq: 466.16, key: 'u', isBlack: true },
+    { note: 'B4', freq: 493.88, key: 'j', isBlack: false },
+    { note: 'C5', freq: 523.25, key: 'k', isBlack: false },
+    { note: 'C#5', freq: 554.37, key: 'o', isBlack: true },
+    { note: 'D5', freq: 587.33, key: 'l', isBlack: false },
+    { note: 'D#5', freq: 622.25, key: 'p', isBlack: true },
+    { note: 'E5', freq: 659.25, key: ';', isBlack: false }
+  ];
+
+  function renderKeyboard() {
+    keysContainer.innerHTML = '';
+    notesMap.forEach(n => {
+      const btn = document.createElement('div');
+      btn.className = `pw-key ${n.isBlack ? 'black' : 'white'}`;
+      btn.setAttribute('data-freq', n.freq);
+      btn.setAttribute('title', `${n.note} (${n.key.toUpperCase()})`);
+      keysContainer.appendChild(btn);
+
+      btn.addEventListener('mousedown', () => {
+        noteOn(n.freq);
+        btn.classList.add('active');
+      });
+      const endNote = () => {
+        noteOff(n.freq);
+        btn.classList.remove('active');
+      };
+      btn.addEventListener('mouseup', endNote);
+      btn.addEventListener('mouseleave', endNote);
+    });
+  }
+
+  function handleKeyDown(e) {
+    if (!isRunning || pwMode.value !== 'synth') return;
+    const matchingNote = notesMap.find(n => n.key === e.key.toLowerCase());
+    if (matchingNote) {
+      noteOn(matchingNote.freq);
+      const keyEl = keysContainer.querySelector(`[data-freq="${matchingNote.freq}"]`);
+      if (keyEl) keyEl.classList.add('active');
+    }
+  }
+
+  function handleKeyUp(e) {
+    if (!isRunning) return;
+    const matchingNote = notesMap.find(n => n.key === e.key.toLowerCase());
+    if (matchingNote) {
+      noteOff(matchingNote.freq);
+      const keyEl = keysContainer.querySelector(`[data-freq="${matchingNote.freq}"]`);
+      if (keyEl) keyEl.classList.remove('active');
+    }
+  }
+
+  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keyup', handleKeyUp);
+
+  function initAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    bufferLength = analyser.frequencyBinCount;
+    dataArray = new Uint8Array(bufferLength);
+
+    masterGain = audioCtx.createGain();
+    masterGain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+
+    masterGain.connect(analyser);
+    analyser.connect(audioCtx.destination);
+  }
+
+  function noteOn(freq) {
+    initAudio();
+    if (!audioCtx || audioCtx.state === 'suspended') return;
+    if (activeNotes.has(freq)) return;
+
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    osc.type = oscType;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+
+    const attack = parseFloat(attackSlider.value);
+    gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.25, audioCtx.currentTime + attack);
+
+    osc.connect(gainNode);
+    gainNode.connect(masterGain);
+
+    osc.start();
+    activeNotes.set(freq, { osc, gain: gainNode });
+  }
+
+  function noteOff(freq) {
+    const note = activeNotes.get(freq);
+    if (!note) return;
+
+    const release = parseFloat(releaseSlider.value);
+    note.gain.gain.cancelScheduledValues(audioCtx.currentTime);
+    note.gain.gain.setValueAtTime(note.gain.gain.value, audioCtx.currentTime);
+    note.gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + release);
+
+    const stopTime = audioCtx.currentTime + release;
+    note.osc.stop(stopTime);
+    
+    setTimeout(() => {
+      try {
+        note.osc.disconnect();
+        note.gain.disconnect();
+      } catch (e) {}
+    }, (release + 0.2) * 1000);
+
+    activeNotes.delete(freq);
+  }
+
+  function stopAllNotes() {
+    activeNotes.forEach((note, freq) => {
+      try {
+        note.osc.stop();
+        note.osc.disconnect();
+        note.gain.disconnect();
+      } catch (e) {}
+    });
+    activeNotes.clear();
+  }
+
+  function stopAmbient() {
+    ambientNodes.forEach(node => {
+      try {
+        node.stop();
+        node.disconnect();
+      } catch (e) {}
+    });
+    ambientNodes.length = 0;
+  }
+
+  function playAmbientDrone() {
+    stopAmbient();
+    initAudio();
+    if (!audioCtx) return;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(150, audioCtx.currentTime);
+    filter.Q.setValueAtTime(4, audioCtx.currentTime);
+    filter.connect(masterGain);
+
+    const freqs = [55, 55.4, 110];
+    freqs.forEach((f, idx) => {
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(f, audioCtx.currentTime);
+
+      const oscGain = audioCtx.createGain();
+      oscGain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+
+      const lfo = audioCtx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.setValueAtTime(parseFloat(intensitySlider.value) + idx * 0.1, audioCtx.currentTime);
+
+      const lfoGain = audioCtx.createGain();
+      lfoGain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+
+      lfo.connect(lfoGain);
+      lfoGain.connect(oscGain.gain);
+      
+      osc.connect(oscGain);
+      oscGain.connect(filter);
+
+      lfo.start();
+      osc.start();
+
+      ambientNodes.push(lfo, osc);
+    });
+  }
+
+  function playCyberpunkRain() {
+    stopAmbient();
+    initAudio();
+    if (!audioCtx) return;
+
+    const bufferSize = audioCtx.sampleRate * 2;
+    const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const output = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      output[i] = Math.random() * 2 - 1;
+    }
+
+    const whiteNoise = audioCtx.createBufferSource();
+    whiteNoise.buffer = noiseBuffer;
+    whiteNoise.loop = true;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(400, audioCtx.currentTime);
+    filter.Q.setValueAtTime(1, audioCtx.currentTime);
+
+    const rainGain = audioCtx.createGain();
+    rainGain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+
+    const lfo = audioCtx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(0.15, audioCtx.currentTime);
+    const lfoGain = audioCtx.createGain();
+    lfoGain.gain.setValueAtTime(250, audioCtx.currentTime);
+
+    lfo.connect(lfoGain);
+    lfoGain.connect(filter.frequency);
+
+    whiteNoise.connect(filter);
+    filter.connect(rainGain);
+    rainGain.connect(masterGain);
+
+    lfo.start();
+    whiteNoise.start();
+
+    ambientNodes.push(lfo, whiteNoise);
+  }
+
+  function playAstraEchoes() {
+    stopAmbient();
+    initAudio();
+    if (!audioCtx) return;
+
+    const notes = [220.00, 261.63, 329.63, 392.00, 440.00, 523.25, 659.25];
+    let noteIdx = 0;
+
+    const delay = audioCtx.createDelay();
+    delay.delayTime.setValueAtTime(0.4, audioCtx.currentTime);
+    const feedback = audioCtx.createGain();
+    feedback.gain.setValueAtTime(0.4, audioCtx.currentTime);
+
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(masterGain);
+
+    function triggerNext() {
+      if (!isRunning || pwMode.value !== 'echo') return;
+      
+      const f = notes[noteIdx];
+      noteIdx = (noteIdx + Math.floor(Math.random() * 3 + 1)) % notes.length;
+
+      const osc = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, audioCtx.currentTime);
+
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.15, audioCtx.currentTime + 0.1);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.9);
+
+      osc.connect(gainNode);
+      gainNode.connect(masterGain);
+      gainNode.connect(delay);
+
+      osc.start();
+      osc.stop(audioCtx.currentTime + 1.0);
+
+      setTimeout(triggerNext, 450 + Math.random() * 200);
+    }
+
+    triggerNext();
+  }
+
+  function updateMode() {
+    const val = pwMode.value;
+    stopAllNotes();
+    stopAmbient();
+
+    if (val === 'synth') {
+      synthControls.forEach(el => el.style.display = 'block');
+      droneControls.forEach(el => el.style.display = 'none');
+    } else {
+      synthControls.forEach(el => el.style.display = 'none');
+      droneControls.forEach(el => el.style.display = 'block');
+      
+      if (isRunning) {
+        if (val === 'drone') playAmbientDrone();
+        else if (val === 'cyber') playCyberpunkRain();
+        else if (val === 'echo') playAstraEchoes();
+      }
+    }
+  }
+
+  attackSlider.addEventListener('input', () => {
+    attackVal.textContent = attackSlider.value + 's';
+  });
+  releaseSlider.addEventListener('input', () => {
+    releaseVal.textContent = releaseSlider.value + 's';
+  });
+  intensitySlider.addEventListener('input', () => {
+    intensityVal.textContent = intensitySlider.value + 'Hz';
+    if (isRunning && pwMode.value === 'drone') {
+      playAmbientDrone();
+    }
+  });
+
+  pwMode.addEventListener('change', updateMode);
+
+  container.querySelectorAll('.pw-wave-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('.pw-wave-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      oscType = btn.getAttribute('data-wave');
+    });
+  });
+
+  startBtn.addEventListener('click', () => {
+    initAudio();
+    if (!audioCtx) return;
+
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+
+    if (!isRunning) {
+      isRunning = true;
+      startBtn.textContent = '⏹ Stop Audio Engine';
+      startBtn.classList.remove('btn-primary');
+      startBtn.classList.add('btn-outline');
+      statusDiv.textContent = 'Context: Active';
+      statusDiv.style.color = '#48bb78';
+      updateMode();
+      
+      if (loopId) cancelAnimationFrame(loopId);
+      visualizerLoop();
+    } else {
+      isRunning = false;
+      startBtn.textContent = '🔊 Start Audio Engine';
+      startBtn.classList.remove('btn-outline');
+      startBtn.classList.add('btn-primary');
+      statusDiv.textContent = 'Context: Suspended';
+      statusDiv.style.color = 'var(--text-muted)';
+      stopAllNotes();
+      stopAmbient();
+    }
+  });
+
+  function visualizerLoop() {
+    if (!container.offsetParent) {
+      isRunning = false;
+      startBtn.textContent = '🔊 Start Audio Engine';
+      startBtn.classList.remove('btn-outline');
+      startBtn.classList.add('btn-primary');
+      statusDiv.textContent = 'Context: Suspended';
+      statusDiv.style.color = 'var(--text-muted)';
+      stopAllNotes();
+      stopAmbient();
+      return;
+    }
+
+    if (isRunning) {
+      loopId = requestAnimationFrame(visualizerLoop);
+    }
+
+    ctx.fillStyle = '#080b11';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!analyser) {
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height / 2);
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.stroke();
+      return;
+    }
+
+    analyser.getByteTimeDomainData(dataArray);
+
+    ctx.lineWidth = 3;
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    gradient.addColorStop(0, '#a855f7');
+    gradient.addColorStop(0.5, '#3b82f6');
+    gradient.addColorStop(1, '#00f7ff');
+    ctx.strokeStyle = gradient;
+
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#00f7ff';
+
+    ctx.beginPath();
+
+    const sliceWidth = canvas.width / bufferLength;
+    let x = 0;
+
+    for (let i = 0; i < bufferLength; i++) {
+      const v = dataArray[i] / 128.0;
+      const y = (v * canvas.height) / 2;
+
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+
+      x += sliceWidth;
+    }
+
+    ctx.lineTo(canvas.width, canvas.height / 2);
+    ctx.stroke();
+    
+    ctx.shadowBlur = 0;
+  }
+
+  const observer = new MutationObserver(() => {
+    if (!document.body.contains(container)) {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      stopAllNotes();
+      stopAmbient();
+      if (audioCtx) audioCtx.close();
+      observer.disconnect();
+    }
+  });
+  observer.observe(container.parentNode || container, { childList: true });
+
+  renderKeyboard();
+  updateMode();
+};
+

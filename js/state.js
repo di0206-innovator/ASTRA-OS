@@ -312,7 +312,9 @@ export class OSState {
       { name: 'whois', version: '5.5.20', description: 'Domain name lookup tool', installed: false, category: 'network' },
       { name: 'curl', version: '8.5.0', description: 'Transfer data from URLs', installed: true, category: 'network' },
       { name: 'nodejs', version: '20.10.0', description: 'JavaScript runtime environment', installed: true, category: 'dev' },
-      { name: 'npm', version: '10.2.3', description: 'Node.js package manager', installed: true, category: 'dev' }
+      { name: 'npm', version: '10.2.3', description: 'Node.js package manager', installed: true, category: 'dev' },
+      { name: 'astroid', version: '1.0.0', description: 'Retro Astro-Defense arcade shooter desktop app', installed: false, category: 'fun' },
+      { name: 'pulsewave', version: '1.0.0', description: 'Realtime audio visualizer and ambient soundscapes desktop app', installed: false, category: 'fun' }
     ];
   }
 

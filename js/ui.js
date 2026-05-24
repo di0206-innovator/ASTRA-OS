@@ -30,6 +30,17 @@ export class UIController {
     this.setupWindowDragging();
     this.setupDesktopIcons();
     this.setupDock();
+    // Add visual app shortcuts from App Store if they are installed
+    const visualApps = [
+      { id: 'astroid', title: 'Astro Defender Game', emoji: '🎮' },
+      { id: 'pulsewave', title: 'PulseWave Ambient Player', emoji: '🎵' }
+    ];
+    visualApps.forEach(app => {
+      const pkg = this.state.packages.find(p => p.name === app.id);
+      if (pkg && pkg.installed) {
+        this.addDockShortcut(app.id, app.title, app.emoji);
+      }
+    });
     this.setupLockScreen();
     this.setupContextMenu();
     this.setupNotificationCenter();
@@ -547,7 +558,9 @@ export class UIController {
       calculator: '🧮 Calculator',
       dailybriefing: '📅 Daily Briefing',
       trust: '🛡️ Trust & Safety',
-      timeline: '⏳ Cognitive Timeline'
+      timeline: '⏳ Cognitive Timeline',
+      astroid: '🎮 Astro Defender Game',
+      pulsewave: '🎵 PulseWave Ambient Player'
     };
     const title = Reflect.get(titles, appId) || (appId.charAt(0).toUpperCase() + appId.slice(1));
     const win = document.createElement('div');
@@ -629,8 +642,12 @@ export class UIController {
   }
 
   openApp(appId) {
-    const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
-    if (!proc) return;
+    let proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+    if (!proc) {
+      // Dynamic process state for newly installed App Store apps!
+      proc = { open: false, minimized: false, x: 200, y: 150, w: 600, h: 420, zIndex: 25 };
+      Reflect.set(this.state.processes, window.sanitizeKey(appId), proc);
+    }
     let win = document.querySelector(`.window[data-app="${window.escapeHTML(appId)}"]`);
     if (!win) {
       win = this.createWindowDOM(appId);
@@ -750,6 +767,41 @@ export class UIController {
         if (proc?.open && !proc.minimized) this.minimizeApp(appId);
         else this.openApp(appId);
       });
+    });
+  }
+
+  addDockShortcut(appId, title, emoji) {
+    const dockCenter = document.querySelector('.dock-center');
+    if (!dockCenter) return;
+    
+    // Check if it already exists
+    if (document.getElementById(`dock-${appId}`)) return;
+    
+    const separator = dockCenter.querySelector('.dock-separator');
+    
+    const btn = document.createElement('button');
+    btn.className = 'dock-item app-shortcut';
+    btn.id = `dock-${appId}`;
+    btn.setAttribute('data-app', appId);
+    btn.setAttribute('title', title);
+    
+    window.renderSafeHTML(btn, `
+      <span style="font-size: 20px; line-height: 1;">${emoji}</span>
+      <span class="active-dot"></span>
+    `);
+    
+    // Insert before the separator
+    if (separator) {
+      dockCenter.insertBefore(btn, separator);
+    } else {
+      dockCenter.appendChild(btn);
+    }
+    
+    // Wire click event immediately!
+    btn.addEventListener('click', () => {
+      const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+      if (proc?.open && !proc.minimized) this.minimizeApp(appId);
+      else this.openApp(appId);
     });
   }
 

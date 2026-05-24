@@ -690,4 +690,637 @@ export class Kernel {
     this.state.saveState();
     return count;
   }
+
+  resolveRelativePath(path, currentDir) {
+    if (path.startsWith('/')) return path;
+    if (path === '~') return '/home/' + (this.state.currentSession.currentUser || 'divyanshu');
+    if (path.startsWith('~/')) return '/home/' + (this.state.currentSession.currentUser || 'divyanshu') + '/' + path.substring(2);
+    if (currentDir === '/') return '/' + path;
+    return currentDir + '/' + path;
+  }
+
+  printTree(node, prefix, outputLines) {
+    if (!node || !node.children) return;
+    const keys = Object.keys(node.children);
+    keys.forEach((name, idx) => {
+      const isLast = idx === keys.length - 1;
+      const connector = isLast ? '└── ' : '├── ';
+      const child = Reflect.get(node.children, name);
+      outputLines.push(`${prefix}${connector}${name}${child.type === 'dir' ? '/' : ''}`);
+      if (child.type === 'dir') this.printTree(child, prefix + (isLast ? '    ' : '│   '), outputLines);
+    });
+  }
+
+  findFiles(node, basePath, pattern) {
+    let results = [];
+    if (!node || !node.children) return results;
+    Object.keys(node.children).forEach(name => {
+      const child = Reflect.get(node.children, name);
+      const fullPath = basePath === '/' ? `/${name}` : `${basePath}/${name}`;
+      if (pattern === '*' || name.includes(pattern.replace('*', ''))) results.push(fullPath);
+      if (child.type === 'dir') results = results.concat(this.findFiles(child, fullPath, pattern));
+    });
+    return results;
+  }
+
+  executeCommand(rawCmd, currentDir, history = []) {
+    const parts = rawCmd.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+    if (parts.length === 0) return { output: [] };
+    const cmd = parts[0];
+    const args = parts.slice(1).map(a => a.replace(/^"|"$/g, ''));
+    const output = [];
+    let cls = '';
+    let newDir = null;
+    let action = '';
+    let toast = null;
+
+    if (cmd === 'sudo') {
+      const user = this.state.users.find(u => u.username === this.state.currentSession.currentUser);
+      if (!user || user.role !== 'admin') return { output: ['sudo: permission denied'], cls: 'error' };
+      output.push(`[sudo] password accepted for ${this.state.currentSession.currentUser}`);
+      const innerRes = this.executeCommand(parts.slice(1).join(' '), currentDir, history);
+      return {
+        output: [...output, ...(innerRes.output || [])],
+        cls: innerRes.cls,
+        newDir: innerRes.newDir,
+        action: innerRes.action,
+        toast: innerRes.toast
+      };
+    }
+
+    switch (cmd) {
+      case 'help':
+        output.push(
+          '━━━ Astra OS Terminal — Command Reference ━━━',
+          '',
+          'FILESYSTEM:  ls, cat, pwd, cd, mkdir, touch, rm, cp, mv, chmod, chown, tree, find, grep, echo, wc',
+          'PROCESSES:   ps, kill, top, uptime',
+          'USER:        whoami, su, sudo, passwd, id',
+          'PACKAGE:     apt update, apt install, apt remove, apt list, apt search',
+          'NETWORK:     ping, curl, ifconfig, nslookup, netstat, wget, hostname',
+          'GIT:         git init/status/add/commit/log/diff/branch/checkout',
+          'SYSTEM:      neofetch, uname, date, df, free, dmesg, clear, history, sysreset',
+          'FUN:         cowsay, fortune, sl, figlet (install via apt)',
+          ''
+        );
+        cls = 'info';
+        break;
+
+      case 'ls': {
+        const target = args[0] ? this.resolveRelativePath(args[0], currentDir) : currentDir;
+        const showHidden = args.includes('-a') || args.includes('-la') || args.includes('-al');
+        const showLong = args.includes('-l') || args.includes('-la') || args.includes('-al');
+        const dir = this.state.resolvePath(target);
+        if (!dir || dir.type !== 'dir') {
+          output.push(`ls: cannot access '${args[0] || target}': No such file or directory`);
+          cls = 'error';
+          break;
+        }
+        const entries = Object.keys(dir.children || {}).filter(n => showHidden || !n.startsWith('.')).sort();
+        if (showLong) {
+          entries.forEach(name => {
+            const node = Reflect.get(dir.children, window.sanitizeKey(name));
+            if (!node) return;
+            const perm = node.permissions || (node.type === 'dir' ? 'drwxr-xr-x' : '-rw-r--r--');
+            const owner = node.owner || 'divyanshu';
+            const size = node.type === 'file' ? (node.content || '').length : 4096;
+            const prefix = node.type === 'dir' ? 'd' : '-';
+            output.push(`${prefix}${perm}  ${owner.padEnd(12)} ${String(size).padStart(8)}  ${name}${node.type === 'dir' ? '/' : ''}`);
+          });
+        } else {
+          output.push(entries.map(n => {
+            const node = Reflect.get(dir.children, window.sanitizeKey(n));
+            return (node && node.type === 'dir') ? n + '/' : n;
+          }).join('  '));
+        }
+        break;
+      }
+      case 'cat': {
+        if (!args[0]) {
+          output.push('cat: missing operand');
+          cls = 'error';
+          break;
+        }
+        const path = this.resolveRelativePath(args[0], currentDir);
+        const file = this.state.resolvePath(path);
+        if (!file) {
+          output.push(`cat: ${args[0]}: No such file or directory`);
+          cls = 'error';
+          break;
+        }
+        if (file.type === 'dir') {
+          output.push(`cat: ${args[0]}: Is a directory`);
+          cls = 'error';
+          break;
+        }
+        output.push(...(file.content || '').split('\n'));
+        break;
+      }
+      case 'pwd':
+        output.push(currentDir);
+        break;
+      case 'cd': {
+        if (!args[0] || args[0] === '~') {
+          newDir = '/home/' + (this.state.currentSession.currentUser || 'divyanshu');
+        } else if (args[0] === '..') {
+          const parts = currentDir.split('/').filter(Boolean);
+          parts.pop();
+          newDir = '/' + parts.join('/');
+        } else if (args[0] === '-') {
+          output.push(currentDir);
+        } else {
+          const target = this.resolveRelativePath(args[0], currentDir);
+          const dir = this.state.resolvePath(target);
+          if (!dir || dir.type !== 'dir') {
+            output.push(`cd: ${args[0]}: No such directory`);
+            cls = 'error';
+            break;
+          }
+          newDir = target;
+        }
+        break;
+      }
+      case 'mkdir': {
+        if (!args[0]) {
+          output.push('mkdir: missing operand');
+          cls = 'error';
+          break;
+        }
+        const path = this.resolveRelativePath(args[0], currentDir);
+        this.state.createDir(path);
+        break;
+      }
+      case 'touch': {
+        if (!args[0]) {
+          output.push('touch: missing operand');
+          cls = 'error';
+          break;
+        }
+        const path = this.resolveRelativePath(args[0], currentDir);
+        if (!this.state.resolvePath(path)) this.state.writeFile(path, '');
+        break;
+      }
+      case 'rm': {
+        if (!args[0]) {
+          output.push('rm: missing operand');
+          cls = 'error';
+          break;
+        }
+        const cleanPathArg = args[0].replace('-rf ', '').replace('-r ', '');
+        const path = this.resolveRelativePath(cleanPathArg, currentDir);
+        this.moveToTrash(path);
+        break;
+      }
+      case 'cp': {
+        if (args.length < 2) {
+          output.push('cp: missing operand');
+          cls = 'error';
+          break;
+        }
+        const src = this.resolveRelativePath(args[0], currentDir);
+        const dst = this.resolveRelativePath(args[1], currentDir);
+        if (!this.state.copyFile(src, dst)) {
+          output.push(`cp: cannot copy '${args[0]}'`);
+          cls = 'error';
+        }
+        break;
+      }
+      case 'mv': {
+        if (args.length < 2) {
+          output.push('mv: missing operand');
+          cls = 'error';
+          break;
+        }
+        const src = this.resolveRelativePath(args[0], currentDir);
+        const dst = this.resolveRelativePath(args[1], currentDir);
+        if (!this.state.moveFile(src, dst)) {
+          output.push(`mv: cannot move '${args[0]}'`);
+          cls = 'error';
+        }
+        break;
+      }
+      case 'chmod': {
+        if (args.length < 2) {
+          output.push('chmod: missing operand');
+          cls = 'error';
+          break;
+        }
+        this.chmod(this.resolveRelativePath(args[1], currentDir), args[0]);
+        break;
+      }
+      case 'chown': {
+        if (args.length < 2) {
+          output.push('chown: missing operand');
+          cls = 'error';
+          break;
+        }
+        this.chown(this.resolveRelativePath(args[1], currentDir), args[0]);
+        break;
+      }
+      case 'tree': {
+        const target = args[0] ? this.resolveRelativePath(args[0], currentDir) : currentDir;
+        const dir = this.state.resolvePath(target);
+        if (!dir || dir.type !== 'dir') {
+          output.push('tree: not a directory');
+          cls = 'error';
+          break;
+        }
+        output.push(target);
+        this.printTree(dir, '', output);
+        break;
+      }
+      case 'find': {
+        const pattern = args[0] || '*';
+        const dir = this.state.resolvePath(currentDir);
+        if (dir) {
+          const results = this.findFiles(dir, currentDir, pattern);
+          output.push(...(results.length > 0 ? results : ['(no matches)']));
+          cls = 'info';
+        }
+        break;
+      }
+      case 'grep': {
+        if (args.length < 2) {
+          output.push('grep: usage: grep <pattern> <file>');
+          cls = 'error';
+          break;
+        }
+        const pattern = args[0];
+        const path = this.resolveRelativePath(args[1], currentDir);
+        const file = this.state.resolvePath(path);
+        if (!file || file.type !== 'file') {
+          output.push(`grep: ${args[1]}: No such file`);
+          cls = 'error';
+          break;
+        }
+        const fileLines = (file.content || '').split('\n');
+        let found = false;
+        fileLines.forEach((line, i) => {
+          if (line.toLowerCase().includes(pattern.toLowerCase())) {
+            output.push(`${i + 1}: ${line}`);
+            found = true;
+          }
+        });
+        if (!found) output.push('(no matches)');
+        break;
+      }
+      case 'echo':
+        output.push(args.join(' '));
+        break;
+      case 'wc': {
+        if (!args[0]) {
+          output.push('wc: missing operand');
+          cls = 'error';
+          break;
+        }
+        const path = this.resolveRelativePath(args[0], currentDir);
+        const file = this.state.resolvePath(path);
+        if (!file || file.type !== 'file') {
+          output.push(`wc: ${args[0]}: No such file`);
+          cls = 'error';
+          break;
+        }
+        const lineCount = (file.content || '').split('\n').length;
+        const wordCount = (file.content || '').split(/\s+/).filter(Boolean).length;
+        const charCount = (file.content || '').length;
+        output.push(`  ${lineCount}  ${wordCount}  ${charCount} ${args[0]}`);
+        break;
+      }
+      case 'ps': {
+        const procs = this.listProcesses();
+        output.push('  PID   NAME             STATE      CPU%   MEM(MB)');
+        output.push('  ---   ----             -----      ----   -------');
+        procs.forEach(p => {
+          output.push(`  ${String(p.pid).padEnd(6)}${p.name.padEnd(17)}${p.state.padEnd(11)}${String(p.cpuPercent).padEnd(7)}${p.memMB}`);
+        });
+        break;
+      }
+      case 'kill': {
+        if (!args[0]) {
+          output.push('kill: usage: kill <pid>');
+          cls = 'error';
+          break;
+        }
+        const res = this.killProcess(args[0]);
+        output.push(res.success ? `Killed ${res.name} (PID ${args[0]})` : res.error);
+        cls = res.success ? 'success' : 'error';
+        break;
+      }
+      case 'top': {
+        output.push(`top - ${new Date().toLocaleTimeString()}, up ${this.getUptime()}, ${this.listProcesses().length} tasks`);
+        output.push(`CPU: ${this.getTotalCpu()}%   MEM: ${this.getTotalMem()}MB / ${this.state.hardware.ram.totalGB * 1024}MB`);
+        output.push('');
+        const procs = this.listProcesses().sort((a, b) => parseFloat(b.cpuPercent) - parseFloat(a.cpuPercent)).slice(0, 15);
+        output.push('  PID   NAME             STATE      CPU%   MEM');
+        procs.forEach(p => output.push(`  ${String(p.pid).padEnd(6)}${p.name.padEnd(17)}${p.state.padEnd(11)}${String(p.cpuPercent).padEnd(7)}${p.memMB}MB`));
+        break;
+      }
+      case 'uptime':
+        output.push(`up ${this.getUptime()}, ${this.listProcesses().length} processes`);
+        break;
+      case 'whoami':
+        output.push(this.getCurrentUser());
+        break;
+      case 'id': {
+        const s = this.state.currentSession;
+        output.push(`uid=${s.uid}(${s.currentUser}) gid=1000(staff) groups=1000(staff)${s.role === 'admin' ? ',27(sudo)' : ''}`);
+        break;
+      }
+      case 'su': {
+        if (!args[0]) {
+          output.push('su: usage: su <username>');
+          cls = 'error';
+          break;
+        }
+        if (this.switchUser(args[0])) {
+          output.push(`Switched to ${args[0]}`);
+          cls = 'success';
+        } else {
+          output.push(`su: user '${args[0]}' not found`);
+          cls = 'error';
+        }
+        break;
+      }
+      case 'passwd':
+        output.push('Password change is handled via Settings > Security.');
+        cls = 'info';
+        break;
+      case 'apt': {
+        const subCmd = args[0];
+        if (subCmd === 'update') {
+          output.push(...this.aptUpdate());
+        } else if (subCmd === 'install') {
+          if (!args[1]) {
+            output.push('apt install: missing package name');
+            cls = 'error';
+            break;
+          }
+          const res = this.aptInstall(args[1]);
+          output.push(...res.lines);
+          cls = res.success ? '' : 'error';
+          if (res.success) {
+            toast = { title: 'Package Installed', message: `${args[1]} has been installed successfully.`, type: 'success' };
+          }
+        } else if (subCmd === 'remove') {
+          if (!args[1]) {
+            output.push('apt remove: missing package name');
+            cls = 'error';
+            break;
+          }
+          const res = this.aptRemove(args[1]);
+          output.push(...res.lines);
+          cls = res.success ? '' : 'error';
+        } else if (subCmd === 'list') {
+          const installed = args.includes('--installed');
+          const pkgs = this.aptList(installed);
+          pkgs.forEach(p => output.push(`${p.name}/${p.version} ${p.installed ? '[installed]' : ''}`));
+        } else if (subCmd === 'search') {
+          if (!args[1]) {
+            output.push('apt search: missing query');
+            cls = 'error';
+            break;
+          }
+          const pkgs = this.aptSearch(args[1]);
+          pkgs.forEach(p => output.push(`${p.name} - ${p.description}`));
+        } else {
+          output.push('apt: usage: apt [update|install|remove|list|search] ...');
+          cls = 'error';
+        }
+        break;
+      }
+      case 'ping': {
+        if (!args[0]) {
+          output.push('ping: missing host');
+          cls = 'error';
+          break;
+        }
+        output.push(...this.ping(args[0]));
+        break;
+      }
+      case 'curl': {
+        if (!args[0]) {
+          output.push('curl: missing URL');
+          cls = 'error';
+          break;
+        }
+        output.push(...this.curl(args[0]));
+        break;
+      }
+      case 'ifconfig':
+        output.push(...this.ifconfig());
+        break;
+      case 'nslookup': {
+        if (!args[0]) {
+          output.push('nslookup: missing host');
+          cls = 'error';
+          break;
+        }
+        output.push(...this.nslookup(args[0]));
+        break;
+      }
+      case 'netstat':
+        output.push(...this.netstat());
+        break;
+      case 'wget': {
+        if (!args[0]) {
+          output.push('wget: missing URL');
+          cls = 'error';
+          break;
+        }
+        const fileName = args[0].split('/').pop() || 'index.html';
+        output.push(
+          `--${new Date().toLocaleTimeString()}--  ${args[0]}`,
+          `Resolving host... connected.`,
+          `HTTP request sent, awaiting response... 200 OK`,
+          `Length: ${Math.floor(Math.random() * 50000 + 5000)} bytes`,
+          `Saving to: '${fileName}'`,
+          `${fileName}  100%[==================>]  saved.`
+        );
+        cls = 'success';
+        break;
+      }
+      case 'hostname':
+        output.push(this.state.network.hostname || 'astra-desktop');
+        break;
+      case 'git': {
+        const sub = args[0];
+        if (sub === 'init') {
+          output.push(...this.gitInit(currentDir));
+        } else if (sub === 'status') {
+          output.push(...this.gitStatus(currentDir));
+        } else if (sub === 'add') {
+          const res = this.gitAdd(currentDir, args[1] || '.');
+          if (res.length > 0) {
+            output.push(...res);
+            cls = 'error';
+          }
+        } else if (sub === 'commit') {
+          const mFlag = args.indexOf('-m');
+          const msg = mFlag >= 0 ? args.slice(mFlag + 1).join(' ').replace(/^"|"$/g, '') : 'No message';
+          output.push(...this.gitCommit(currentDir, msg));
+        } else if (sub === 'log') {
+          output.push(...this.gitLog(currentDir));
+        } else if (sub === 'diff') {
+          output.push(...this.gitDiff(currentDir));
+        } else if (sub === 'branch') {
+          output.push(...this.gitBranch(currentDir));
+        } else if (sub === 'checkout') {
+          const isNew = args[1] === '-b';
+          const branchName = isNew ? args[2] : args[1];
+          if (!branchName) {
+            output.push('git checkout: specify branch name');
+            cls = 'error';
+            break;
+          }
+          output.push(...this.gitCheckoutBranch(currentDir, branchName, isNew));
+        } else {
+          output.push(`git: '${sub}' is not a git command. See 'help'.`);
+          cls = 'error';
+        }
+        break;
+      }
+      case 'neofetch':
+        if (!this.isPackageInstalled('neofetch')) {
+          output.push('neofetch: command not found. Install with: apt install neofetch');
+          cls = 'error';
+        } else {
+          output.push(...this.neofetch());
+        }
+        break;
+      case 'uname':
+        output.push(args.includes('-a') ? 'Astra astra-desktop 6.2.0-astra #1 SMP x86_64 GNU/Astra' : 'Astra');
+        break;
+      case 'date':
+        output.push(new Date().toString());
+        break;
+      case 'df':
+        output.push('Filesystem   Type   Size   Used   Avail  Use%  Mounted');
+        output.push(...this.dfHuman());
+        break;
+      case 'free':
+        output.push(...this.freeHuman());
+        break;
+      case 'dmesg':
+        output.push(...this.dmesg(args[0] ? parseInt(args[0]) : 30));
+        break;
+      case 'clear':
+        action = 'clear';
+        break;
+      case 'history':
+        history.forEach((c, i) => output.push(`  ${i + 1}  ${c}`));
+        break;
+      case 'sysreset':
+        output.push('⚠ Factory resetting Astra OS...');
+        action = 'reset';
+        break;
+      case 'cowsay': {
+        if (!this.isPackageInstalled('cowsay')) {
+          output.push('cowsay: command not found. Install with: apt install cowsay');
+          cls = 'error';
+          break;
+        }
+        const msg = args.join(' ') || 'Moo!';
+        const pad = msg.length + 2;
+        output.push(
+          ' ' + '_'.repeat(pad),
+          `< ${msg} >`,
+          ' ' + '-'.repeat(pad),
+          '        \\   ^__^',
+          '         \\  (oo)\\_______',
+          '            (__)\\       )\\/\\',
+          '                ||----w |',
+          '                ||     ||'
+        );
+        break;
+      }
+      case 'fortune': {
+        if (!this.isPackageInstalled('fortune')) {
+          output.push('fortune: command not found. Install with: apt install fortune');
+          cls = 'error';
+          break;
+        }
+        const fortunes = [
+          'The best way to predict the future is to invent it. — Alan Kay',
+          'Programs must be written for people to read, and only incidentally for machines to execute. — Abelson & Sussman',
+          'Any sufficiently advanced technology is indistinguishable from magic. — Arthur C. Clarke',
+          'First, solve the problem. Then, write the code. — John Johnson',
+          'Talk is cheap. Show me the code. — Linus Torvalds',
+          'The computer was born to solve problems that did not exist before. — Bill Gates',
+          'The most disastrous thing that you can ever learn is your first programming language. — Alan Kay'
+        ];
+        output.push(Reflect.get(fortunes, Math.floor(Math.random() * fortunes.length)));
+        break;
+      }
+      case 'sl': {
+        if (!this.isPackageInstalled('sl')) {
+          output.push('sl: command not found. Install with: apt install sl');
+          cls = 'error';
+          break;
+        }
+        output.push(
+          '      ====        ________                ___________',
+          '  _D _|  |_______/        \\__I_I_____===__|___________|',
+          '   |(_)---  |   H\\________/ |   |        =|___ ___|',
+          '   /     |  |   H  |  |     |   |         ||_| |_||',
+          '  |      |  |   H  |__--------------------| [___] |',
+          '  | ________|___H__/__|_____/[][]~\\_______|       |',
+          '  |/ |   |-----------I_____I [][] []  D   |=======|__',
+          '__/ =| o |=-~~\\  /~~\\  /~~\\  /~~\\ ____Y___________|__',
+          ' |/-=|___|=    ||    ||    ||    |_____/~\\___/        ',
+          '  \\_/      \\O=====O=====O=====O_/      \\_/           '
+        );
+        break;
+      }
+      case 'figlet': {
+        if (!this.isPackageInstalled('figlet')) {
+          output.push('figlet: command not found. Install with: apt install figlet');
+          cls = 'error';
+          break;
+        }
+        const text = args.join(' ') || 'ASTRA';
+        const bigMap = {
+          'A': ['  █  ', ' █ █ ', '█████', '█   █', '█   █'],
+          'B': ['████ ', '█   █', '████ ', '█   █', '████ '],
+          'S': [' ████', '█    ', ' ███ ', '    █', '████ '],
+          'T': ['█████', '  █  ', '  █  ', '  █  ', '  █  '],
+          'R': ['████ ', '█   █', '████ ', '█ █  ', '█  █ ']
+        };
+        const chars = text.toUpperCase().split('');
+        for (let r = 0; r < 5; r++) {
+          let line = '';
+          chars.forEach(c => {
+            line += (Reflect.get(bigMap, c) ? Reflect.get(bigMap, c)[r] : '     ') + ' ';
+          });
+          output.push(line);
+        }
+        break;
+      }
+      case 'agent':
+        if (args[0] === 'status') {
+          output.push('Agent System: ONLINE');
+          output.push(`Active: PlannerAgent, ExecutorAgent, MemoryAgent, WatcherAgent, SafetyLayer`);
+          output.push(`Tasks: ${this.state.agentTasks.filter(t => t.status === 'pending').length} pending, ${this.state.agentTasks.filter(t => t.status === 'completed').length} completed`);
+        } else if (args[0] === 'run') {
+          output.push('Initiating agent workflow...');
+          cls = 'working';
+          action = 'agent-run';
+        } else {
+          output.push('agent: usage: agent [status|run]');
+          cls = 'error';
+        }
+        break;
+
+      default:
+        output.push(`${cmd}: command not found. Type 'help' for available commands.`);
+        cls = 'error';
+    }
+
+    return {
+      output,
+      cls,
+      newDir,
+      action,
+      toast
+    };
+  }
 }
