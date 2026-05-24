@@ -368,9 +368,31 @@ function bootOS() {
   const goAfkBtn = document.getElementById('go-afk-btn');
   const wakeUpBtn = document.getElementById('wake-up-btn');
   const afkOverlay = document.getElementById('afk-overlay');
+  const afkPauseBtn = document.getElementById('afk-pause-btn');
+  const afkUndoBtn = document.getElementById('afk-undo-btn');
   
   goAfkBtn.addEventListener('click', () => toggleAFK(true));
   wakeUpBtn.addEventListener('click', () => toggleAFK(false));
+  
+  if (afkPauseBtn) {
+    afkPauseBtn.addEventListener('click', () => {
+      orchestrator.togglePauseWorkflow();
+    });
+  }
+  
+  if (afkUndoBtn) {
+    afkUndoBtn.addEventListener('click', () => {
+      const restored = orchestrator.undoLastWorkflow();
+      ui.showToast('Rollback Complete', `Reverted ${restored} files modified by agent.`, 'success');
+      state.addNotification('success', 'System Rollback', `Successfully reverted ${restored} files modified during AFK mode.`);
+      afkUndoBtn.style.display = 'none';
+      
+      const diffContainer = document.getElementById('summary-diff-container');
+      if (diffContainer) {
+        window.renderSafeHTML(diffContainer, '<span style="color: var(--text-muted)">All modifications successfully reverted.</span>');
+      }
+    });
+  }
 
   function toggleAFK(enable) {
     if (enable) {
@@ -383,6 +405,11 @@ function bootOS() {
       
       // Start dynamic screensaver particle canvas animation
       createScreensaverParticles();
+      
+      if (afkPauseBtn) {
+        afkPauseBtn.textContent = '⏸ Pause Agent';
+      }
+      orchestrator.isPaused = false;
       
       // Seed initial afk logs
       const logsList = document.getElementById('afk-logs-list');
@@ -507,6 +534,15 @@ function bootOS() {
       window.renderSafeHTML(diffContainer, '<span style="color: var(--text-muted)">No files were modified during this session.</span>');
     }
 
+    const undoBtn = document.getElementById('afk-undo-btn');
+    if (undoBtn) {
+      if (orchestrator.afkSummaryData.filesModified.length > 0) {
+        undoBtn.style.display = 'block';
+      } else {
+        undoBtn.style.display = 'none';
+      }
+    }
+
     summaryDialog.showModal();
 
     // Tab bindings inside summary dialog
@@ -527,6 +563,8 @@ function bootOS() {
     // Close button
     document.getElementById('close-summary-btn').addEventListener('click', () => {
       summaryDialog.close();
+      const undoBtn = document.getElementById('afk-undo-btn');
+      if (undoBtn) undoBtn.style.display = 'none';
     });
   }
 

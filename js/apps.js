@@ -986,50 +986,178 @@ window.AstraApps.tasks = function(container, ui) {
 // AI DASHBOARD
 // ==========================================
 window.AstraApps.dashboard = function(container, ui) {
-  const sv = ui.state.systemVars;
-  const tasks = ui.state.agentTasks;
-  const logs = ui.state.auditLogs;
+  function render() {
+    const sv = ui.state.systemVars;
+    const tasks = ui.state.agentTasks;
+    const logs = ui.state.auditLogs;
+    const currentFocus = ui.state.registry.system?.focusMode || 'coding';
 
-  const statsHTML = [
-    { label: 'Active Agents', val: '5', color: 'var(--color-green)' },
-    { label: 'Tasks Completed', val: String(tasks.filter(t => t.status === 'completed').length), color: 'var(--color-blue)' },
-    { label: 'Tokens Used', val: sv.tokensConsumed.toLocaleString(), color: 'var(--color-purple)' },
-    { label: 'AI Mode', val: sv.currentModelMode.split(' ')[0], color: 'var(--color-amber)' }
-  ].map(s => `
-    <div class="stat-card">
-      <div class="stat-label">${s.label}</div>
-      <div class="dashboard-card-val" style="color: ${s.color}">${s.val}</div>
-    </div>
-  `).join('');
-
-  const logsHTML = logs.slice(0, 20).map(l => `
-    <div class="audit-row">
-      <span class="audit-action"><strong>[${l.agent}]</strong> ${l.action}</span>
-      <span class="audit-time">${l.timestamp}</span>
-    </div>
-  `).join('');
-
-  window.renderSafeHTML(container, `
-    <div class="dashboard-app">
-      <div class="dashboard-stats">
-        ${statsHTML}
+    const statsHTML = [
+      { label: 'Active Agents', val: '5', color: 'var(--color-green)' },
+      { label: 'Tasks Completed', val: String(tasks.filter(t => t.status === 'completed').length), color: 'var(--color-blue)' },
+      { label: 'Tokens Used', val: sv.tokensConsumed.toLocaleString(), color: 'var(--color-purple)' },
+      { label: 'Focus Mode', val: currentFocus.toUpperCase(), color: 'var(--color-primary)' }
+    ].map(s => `
+      <div class="stat-card">
+        <div class="stat-label">${s.label}</div>
+        <div class="dashboard-card-val" style="color: ${s.color}">${s.val}</div>
       </div>
-      <div class="dashboard-details-row">
-        <div class="dashboard-panel">
-          <h3>Audit Log</h3>
-          <div class="logs-audit-list">
+    `).join('');
+
+    const logsHTML = logs.slice(0, 10).map(l => `
+      <div class="audit-row">
+        <span class="audit-action"><strong>[${l.agent}]</strong> ${l.action}</span>
+        <span class="audit-time">${l.timestamp}</span>
+      </div>
+    `).join('');
+
+    // Scanners for Work Conscience
+    const indexJs = ui.state.resolvePath('/Project_Astra/index.js');
+    const hasSyntaxError = indexJs && (indexJs.content.includes('SyntaxError') || indexJs.content.includes('Unexpected token'));
+    const readme = ui.state.resolvePath('/Project_Astra/README.md');
+    const readmeOutdated = readme && indexJs && indexJs.content.includes('/api/v1/council') && !readme.content.includes('/api/v1/council');
+    const pendingTasks = tasks.filter(t => t.status === 'pending');
+
+    let conscienceHTML = '';
+    const insightsList = [];
+
+    if (hasSyntaxError) {
+      insightsList.push({
+        type: 'error',
+        text: 'Syntax Error in Project_Astra/index.js: Unexpected token ) on line 20 prevents compilation.',
+        actionLabel: 'Open index.js in Editor',
+        action: 'open-index'
+      });
+    }
+    if (readmeOutdated) {
+      insightsList.push({
+        type: 'warning',
+        text: 'README.md is missing documentation for route `/api/v1/council` implemented in index.js.',
+        actionLabel: 'Open README.md',
+        action: 'open-readme'
+      });
+    }
+    if (pendingTasks.length > 0) {
+      insightsList.push({
+        type: 'info',
+        text: `You have ${pendingTasks.length} pending task(s) remaining in your Agent Task Board checklist.`,
+        actionLabel: 'View Task Board',
+        action: 'open-tasks'
+      });
+    }
+
+    if (insightsList.length === 0) {
+      conscienceHTML = `
+        <div class="conscience-card success">
+          <div class="conscience-text">🟢 All systems active & codebase compiled cleanly. No conscience alerts found!</div>
+        </div>
+      `;
+    } else {
+      insightsList.forEach((ins, idx) => {
+        conscienceHTML += `
+          <div class="conscience-card ${ins.type}">
+            <div class="conscience-text">${window.escapeHTML(ins.text)}</div>
+            <button class="conscience-action-btn" data-act="${ins.action}">${window.escapeHTML(ins.actionLabel)}</button>
+          </div>
+        `;
+      });
+    }
+
+    const gitRepo = Reflect.get(ui.state.gitRepos, '/Project_Astra');
+    const gitBranch = gitRepo ? gitRepo.branch : 'main';
+
+    window.renderSafeHTML(container, `
+      <div class="dashboard-app">
+        <div style="font-size: 16px; font-weight: 600; margin-bottom: -4px;">Welcome back, ${window.escapeHTML(sv.user)}</div>
+        <div style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 4px;">Astra OS active workspace: <strong>/Project_Astra</strong> (Branch: ${window.escapeHTML(gitBranch)})</div>
+        
+        <div class="dashboard-stats">
+          ${statsHTML}
+        </div>
+        
+        <div class="dashboard-details-row" style="grid-template-columns: 1.2fr 1fr; margin-top: 4px;">
+          <!-- Left Column: Smart Desk Workspace Controller -->
+          <div class="dashboard-panel" style="gap: 10px;">
+            <h3>Smart Desk Control Panel</h3>
+            
+            <div style="display: flex; flex-direction: column; gap: 4px; background: rgba(255,255,255,0.02); padding: 10px; border-radius: 8px; border: 1px solid var(--border-glass);">
+              <span style="font-size: 12px; font-weight: 600; color: var(--text-secondary);">Focus Mode Switcher</span>
+              <div class="focus-mode-switches">
+                <button class="focus-btn ${currentFocus === 'coding' ? 'active' : ''}" data-focus="coding">Coding Mode</button>
+                <button class="focus-btn ${currentFocus === 'deepwork' ? 'active' : ''}" data-focus="deepwork">Deep Work</button>
+                <button class="focus-btn ${currentFocus === 'research' ? 'active' : ''}" data-focus="research">Research</button>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 10px; margin-top: 4px;">
+              <button class="btn btn-primary" id="dashboard-continue-work" style="flex: 1; padding: 10px; font-size: 12.5px; font-weight: 600;">🔄 Continue Work (Restore Workspace)</button>
+              <button class="btn btn-secondary" id="dashboard-briefing" style="padding: 10px; font-size: 12.5px;">📅 View Daily Briefing</button>
+            </div>
+
+            <div style="margin-top: 6px; font-size: 11.5px; color: var(--text-secondary); border-top: 1px solid var(--border-glass); padding-top: 8px;">
+              <strong>Workspace Status Summary:</strong>
+              <ul style="margin: 4px 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 3px;">
+                <li>Active Workspace Index: Desktop ${sv.currentWorkspace + 1}</li>
+                <li>VFS filesystem state: ${Object.keys(ui.state.fs.children || {}).length} root folders tracked</li>
+                <li>Audit Log: ${logs.length} background operations recorded</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- Right Column: Work Conscience Scanner -->
+          <div class="dashboard-panel">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <h3>AI Workspace Conscience</h3>
+              <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;">Real-Time Scan</span>
+            </div>
+            <div class="conscience-list">
+              ${conscienceHTML}
+            </div>
+          </div>
+        </div>
+
+        <!-- Bottom Row: Recent Audit Events -->
+        <div class="dashboard-panel" style="flex-grow: 0; min-height: 120px;">
+          <h3>Agent Activity Audit Log (Recent Events)</h3>
+          <div class="logs-audit-list" style="height: 100px;">
             ${logsHTML}
           </div>
         </div>
-        <div class="dashboard-panel">
-          <h3>Model Configuration</h3>
-          <div class="settings-group" style="margin-top: 8px">
-            <div class="detail-row"><span class="detail-label">Local Model</span><span class="detail-val">${sv.localModel}</span></div>
-            <div class="detail-row"><span class="detail-label">Cloud Model</span><span class="detail-val">${sv.cloudModel}</span></div>
-            <div class="detail-row"><span class="detail-label">Active Mode</span><span class="detail-val" style="color: var(--color-green)">${sv.currentModelMode}</span></div>
-          </div>
-        </div>
       </div>
-    </div>
-  `);
+    `);
+
+    // Wire up events
+    container.querySelectorAll('.focus-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-focus');
+        ui.setFocusMode(mode);
+        render();
+      });
+    });
+
+    container.querySelector('#dashboard-continue-work')?.addEventListener('click', () => {
+      ui.restoreWorkspace();
+    });
+
+    container.querySelector('#dashboard-briefing')?.addEventListener('click', () => {
+      ui.openApp('dailybriefing');
+    });
+
+    container.querySelectorAll('[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const act = btn.getAttribute('data-act');
+        if (act === 'open-index') {
+          ui.openApp('editor');
+          setTimeout(() => { if (window.editorOpenFile) window.editorOpenFile('/Project_Astra/index.js'); }, 200);
+        } else if (act === 'open-readme') {
+          ui.openApp('editor');
+          setTimeout(() => { if (window.editorOpenFile) window.editorOpenFile('/Project_Astra/README.md'); }, 200);
+        } else if (act === 'open-tasks') {
+          ui.openApp('tasks');
+        }
+      });
+    });
+  }
+
+  render();
 };

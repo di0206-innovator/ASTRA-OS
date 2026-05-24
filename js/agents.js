@@ -16,6 +16,8 @@ export class AgentOrchestrator {
       memoriesCreated: 0,
       actionsList: []
     };
+    this.isPaused = false;
+    this.vfsSnapshots = {};
   }
 
   // ==========================================
@@ -81,6 +83,8 @@ export class AgentOrchestrator {
   async startWorkflow(userPrompt) {
     if (this.activeWorkflow) return;
     this.activeWorkflow = true;
+    this.vfsSnapshots = {};
+    this.isPaused = false;
 
     // Reset tokens count to simulate execution expense
     this.state.systemVars.tokensConsumed += 1240;
@@ -161,6 +165,7 @@ app.post('/api/v1/council', (req, res) => {
       await this.animateEditorTyping(textarea, originalCode, injectionTarget, codeToInject);
       
       // Update File in Virtual Filesystem
+      this.backupFileBeforeChange('/Project_Astra/index.js');
       this.state.writeFile('/Project_Astra/index.js', replacedCode);
       this.ui.showToast('Task Completed', 'ExecutorAgent implemented routing endpoints.', 'success');
       this.state.updateTaskStatus('task-2', 'completed');
@@ -225,6 +230,7 @@ app.post('/api/v1/council', (req, res) => {
       if (window.refreshTasksBoard) window.refreshTasksBoard();
       
       textarea.value = fixedCode;
+      this.backupFileBeforeChange('/Project_Astra/index.js');
       this.state.writeFile('/Project_Astra/index.js', fixedCode);
       await this.delay(1000);
       
@@ -279,6 +285,7 @@ app.post('/api/v1/council', (req, res) => {
       if (window.refreshTasksBoard) window.refreshTasksBoard();
 
       const newReadme = readmeFile.content + '\n### Council Endpoint\n- **URL:** `/api/v1/council`\n- **Method:** `POST`\n- **Payload:** `{ "command": String, "payload": Object }`\n';
+      this.backupFileBeforeChange('/Project_Astra/README.md');
       this.state.writeFile('/Project_Astra/README.md', newReadme);
       
       // Update editor text area if open on readme
@@ -315,8 +322,79 @@ app.post('/api/v1/council', (req, res) => {
   // Helper Delay
   // ==========================================
   
-  delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  async delay(ms) {
+    let elapsed = 0;
+    const interval = 100;
+    while (elapsed < ms) {
+      if (this.isPaused) {
+        await new Promise(resolve => setTimeout(resolve, interval));
+      } else {
+        await new Promise(resolve => setTimeout(resolve, interval));
+        elapsed += interval;
+      }
+    }
+  }
+
+  togglePauseWorkflow() {
+    this.isPaused = !this.isPaused;
+    this.logAgent('System', this.isPaused ? 'Agent execution paused.' : 'Agent execution resumed.', 'info');
+    const pauseBtn = document.getElementById('afk-pause-btn');
+    if (pauseBtn) {
+      pauseBtn.textContent = this.isPaused ? '▶ Resume Agent' : '⏸ Pause Agent';
+    }
+    const spinner = document.querySelector('.afk-spinner');
+    if (spinner) {
+      if (this.isPaused) {
+        spinner.style.animationPlayState = 'paused';
+      } else {
+        spinner.style.animationPlayState = 'running';
+      }
+    }
+  }
+
+  backupFileBeforeChange(path) {
+    if (Reflect.get(this.vfsSnapshots, path) === undefined) {
+      const fileNode = this.state.resolvePath(path);
+      Reflect.set(this.vfsSnapshots, path, fileNode ? fileNode.content : null);
+    }
+  }
+
+  undoLastWorkflow() {
+    let restoredCount = 0;
+    for (const [path, content] of Object.entries(this.vfsSnapshots)) {
+      if (content === null) {
+        this.state.deleteFile(path);
+      } else {
+        this.state.writeFile(path, content);
+      }
+      restoredCount++;
+    }
+    this.vfsSnapshots = {};
+    
+    // Update active editor text area if it matches
+    const textarea = document.getElementById('editor-text-area');
+    const activeFile = document.getElementById('context-file')?.textContent;
+    if (activeFile && textarea) {
+      const currentFileNode = this.state.resolvePath(activeFile);
+      if (currentFileNode) {
+        textarea.value = currentFileNode.content;
+      }
+    }
+    
+    // Update active editor-content
+    const editorContent = document.getElementById('editor-content');
+    if (editorContent) {
+      const tabActive = document.querySelector('.editor-tab.active span')?.textContent;
+      if (tabActive) {
+        const fileNode = this.state.resolvePath(`/home/divyanshu/Project_Astra/${tabActive}`) || this.state.resolvePath(tabActive);
+        if (fileNode) {
+          editorContent.value = fileNode.content;
+        }
+      }
+    }
+
+    if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+    return restoredCount;
   }
 
   // ==========================================
@@ -647,6 +725,7 @@ app.post('/api/v1/council', (req, res) => {
           return { error: 'Permission denied by user' };
         }
 
+        this.backupFileBeforeChange(args.path);
         this.state.writeFile(args.path, args.content);
         
         // Auto update active editor text area if it matches the edited file path

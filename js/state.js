@@ -33,7 +33,8 @@ export class OSState {
       afkRunning: false,
       afkStartTime: null,
       voiceActive: false,
-      sidebarOpen: false
+      sidebarOpen: false,
+      currentWorkspace: 0
     };
 
     this.initializeState();
@@ -94,6 +95,11 @@ export class OSState {
           this.currentSession.currentUser = 'divyanshu';
           this.currentSession.uid = 1000;
           this.currentSession.role = 'admin';
+          this.saveState();
+        }
+
+        if (!this.processes.dailybriefing) {
+          this.processes.dailybriefing = { open: false, minimized: false, x: 220, y: 120, w: 680, h: 480, zIndex: 23 };
           this.saveState();
         }
 
@@ -326,7 +332,8 @@ export class OSState {
         startupApps: ['editor', 'tasks'],
         defaultShell: '/bin/sh',
         timeFormat: '12h',
-        soundEnabled: true
+        soundEnabled: true,
+        focusMode: 'coding'
       },
       keybindings: {
         commandPalette: 'Cmd+K',
@@ -364,7 +371,8 @@ export class OSState {
       'browser': { open: false, minimized: false, x: 100, y: 50, w: 800, h: 540, zIndex: 19 },
       'appstore': { open: false, minimized: false, x: 160, y: 80, w: 720, h: 500, zIndex: 20 },
       'devicemgr': { open: false, minimized: false, x: 250, y: 120, w: 600, h: 440, zIndex: 21 },
-      'diskutil': { open: false, minimized: false, x: 300, y: 140, w: 640, h: 420, zIndex: 22 }
+      'diskutil': { open: false, minimized: false, x: 300, y: 140, w: 640, h: 420, zIndex: 22 },
+      'dailybriefing': { open: false, minimized: false, x: 220, y: 120, w: 680, h: 480, zIndex: 23 }
     };
   }
 

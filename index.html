@@ -51,6 +51,11 @@
         </svg>
       </div>
       <span class="menu-title active-app-title" id="active-app-indicator">Finder</span>
+      <div class="workspace-switcher" id="workspace-switcher">
+        <button class="ws-btn active" data-ws="0" title="Desktop 1">1</button>
+        <button class="ws-btn" data-ws="1" title="Desktop 2">2</button>
+        <button class="ws-btn" data-ws="2" title="Desktop 3">3</button>
+      </div>
       <div class="menu-dropdown-trigger">File</div>
       <div class="menu-dropdown-trigger">Edit</div>
       <div class="menu-dropdown-trigger">View</div>
@@ -470,6 +475,11 @@
         <span class="active-dot"></span>
       </button>
 
+      <button class="dock-item app-shortcut" data-app="dailybriefing" id="dock-dailybriefing" title="Daily Briefing">
+        <span style="font-size: 20px; line-height: 1;">📅</span>
+        <span class="active-dot"></span>
+      </button>
+
       <div class="dock-separator"></div>
     </div>
 
@@ -643,13 +653,18 @@
           </div>
         </div>
 
-        <button class="afk-wake-btn" id="wake-up-btn">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
-            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
-            <line x1="12" y1="2" x2="12" y2="12"></line>
-          </svg>
-          Wake Up & Resume Workspace
-        </button>
+        <div style="display: flex; gap: 10px; margin-top: 15px; width: 100%;">
+          <button class="afk-wake-btn" id="afk-pause-btn" style="flex: 1; background: var(--bg-glass-light); border: 1px solid rgba(255,255,255,0.1);">
+            ⏸ Pause Agent
+          </button>
+          <button class="afk-wake-btn" id="wake-up-btn" style="flex: 1.5; margin: 0;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
+              <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+              <line x1="12" y1="2" x2="12" y2="12"></line>
+            </svg>
+            Wake Up & Resume
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -700,8 +715,11 @@
         </div>
       </div>
       
-      <div class="summary-footer">
-        <button class="btn btn-primary" id="close-summary-btn">Acknowledge & Resume Work</button>
+      <div class="summary-footer" style="display: flex; justify-content: space-between; align-items: center; width: 100%; gap: 10px;">
+        <button class="btn btn-secondary" id="afk-undo-btn" style="display: none; border: 1px solid #ff5f56; color: #ff5f56; background: rgba(255,95,86,0.05);">
+          ↩ Undo All Changes
+        </button>
+        <button class="btn btn-primary" id="close-summary-btn" style="margin: 0;">Acknowledge & Resume Work</button>
       </div>
     </div>
   </dialog>

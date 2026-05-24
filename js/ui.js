@@ -42,6 +42,7 @@ export class UIController {
     this.setupDesktopWidgets();
     this.updateNotifBadge();
     this.applyTheme();
+    this.initWorkspaces();
 
     // Show lock screen or desktop
     if (this.state.currentSession.isLocked) {
@@ -500,6 +501,9 @@ export class UIController {
   }
 
   focusWindow(appId) {
+    if (this.state.systemVars.missionControlActive) {
+      this.toggleMissionControl();
+    }
     const procs = this.state.processes;
     const allZ = Object.values(procs).map(p => p.zIndex || 0).filter(z => z > 0);
     const maxZ = allZ.length > 0 ? Math.max(...allZ) : 10;
@@ -540,7 +544,8 @@ export class UIController {
       dashboard: '🤖 AI Dashboard',
       devicemgr: '🛠️ Device Manager',
       diskutil: '💾 Disk Utility',
-      calculator: '🧮 Calculator'
+      calculator: '🧮 Calculator',
+      dailybriefing: '📅 Daily Briefing'
     };
     const title = Reflect.get(titles, appId) || (appId.charAt(0).toUpperCase() + appId.slice(1));
     const win = document.createElement('div');
@@ -630,12 +635,20 @@ export class UIController {
     }
 
     if (proc.open && !proc.minimized) {
+      if (proc.workspace !== undefined && proc.workspace !== (this.state.systemVars.currentWorkspace || 0)) {
+        this.switchWorkspace(proc.workspace);
+      }
       this.focusWindow(appId);
       return;
     }
 
     proc.open = true;
     proc.minimized = false;
+    if (proc.workspace === undefined) {
+      proc.workspace = this.state.systemVars.currentWorkspace || 0;
+    }
+    this.updateWorkspaceWindows();
+
     win.classList.remove('hidden');
     win.style.left = `${proc.x}px`;
     win.style.top = `${proc.y}px`;
@@ -798,7 +811,7 @@ export class UIController {
   // ==========================================
   setupKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
-      const isMeta = e.metaKey || e.ctrlKey;
+      const isMeta = e.metaKey || (e.ctrlKey && !['ArrowLeft', 'ArrowRight', 'ArrowUp'].includes(e.key));
 
       // Cmd+K — Command Palette
       if (isMeta && e.key === 'k') {
@@ -830,7 +843,228 @@ export class UIController {
         e.preventDefault();
         if (this.state.activeWindow) this.maximizeApp(this.state.activeWindow);
       }
+
+      // Ctrl+ArrowLeft — Switch Workspace Left
+      if (e.ctrlKey && !e.metaKey && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const current = this.state.systemVars.currentWorkspace || 0;
+        if (current > 0) this.switchWorkspace(current - 1);
+      }
+      // Ctrl+ArrowRight — Switch Workspace Right
+      if (e.ctrlKey && !e.metaKey && e.key === 'ArrowRight') {
+        e.preventDefault();
+        const current = this.state.systemVars.currentWorkspace || 0;
+        if (current < 2) this.switchWorkspace(current + 1);
+      }
+      // F3 or Ctrl+ArrowUp — Toggle Mission Control
+      if (e.key === 'F3' || (e.ctrlKey && !e.metaKey && e.key === 'ArrowUp')) {
+        e.preventDefault();
+        this.toggleMissionControl();
+      }
     });
+  }
+
+  setFocusMode(mode) {
+    if (!['coding', 'deepwork', 'research'].includes(mode)) return;
+    if (this.state.registry.system === undefined) this.state.registry.system = {};
+    this.state.registry.system.focusMode = mode;
+    this.state.saveState();
+
+    const hueColors = { coding: 'cyan', deepwork: 'amber', research: 'blue' };
+    const accent = Reflect.get(hueColors, mode);
+    this.state.registry.appearance.accentColor = accent;
+    this.applyTheme();
+
+    const notifBell = document.getElementById('notif-bell');
+    
+    if (mode === 'deepwork') {
+      this.state.registry.system.notificationsSilenced = true;
+      if (notifBell) {
+        notifBell.setAttribute('title', 'Notifications Silenced (DND)');
+        notifBell.style.color = 'var(--color-amber)';
+      }
+      this.showToast('Focus Mode', 'Deep Work Mode activated (DND on)', 'warning');
+
+      const nonEssential = ['calculator', 'browser', 'appstore', 'sysmonitor', 'devicemgr', 'diskutil', 'dailybriefing'];
+      nonEssential.forEach(appId => {
+        const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+        if (proc && proc.open && !proc.minimized) {
+          this.minimizeApp(appId);
+        }
+      });
+    } else {
+      this.state.registry.system.notificationsSilenced = false;
+      if (notifBell) {
+        notifBell.setAttribute('title', 'Notifications');
+        notifBell.style.color = '';
+      }
+      this.showToast('Focus Mode', `Focus set to ${mode.charAt(0).toUpperCase() + mode.slice(1)}`, 'success');
+      
+      if (mode === 'coding') {
+        this.openApp('editor');
+        this.openApp('terminal');
+      } else if (mode === 'research') {
+        this.openApp('browser');
+        this.openApp('memory');
+      }
+    }
+
+    const dbBody = document.querySelector('.window[data-app="dashboard"] .window-body');
+    if (dbBody && window.AstraApps.dashboard) {
+      window.AstraApps.dashboard(dbBody, this);
+    }
+    
+    this.state.saveState();
+  }
+
+  initWorkspaces() {
+    const currentWp = this.state.systemVars.currentWorkspace || 0;
+    
+    // Set active class on menu-bar workspace button
+    const switcher = document.getElementById('workspace-switcher');
+    if (switcher) {
+      switcher.querySelectorAll('.ws-btn').forEach((btn, idx) => {
+        btn.classList.toggle('active', idx === currentWp);
+        btn.addEventListener('click', () => {
+          this.switchWorkspace(idx);
+        });
+      });
+    }
+
+    this.updateWorkspaceWindows();
+  }
+
+  switchWorkspace(idx) {
+    if (idx < 0 || idx > 2) return;
+    this.state.systemVars.currentWorkspace = idx;
+    this.state.saveState();
+
+    // Exits Mission Control if active
+    if (this.state.systemVars.missionControlActive) {
+      this.toggleMissionControl();
+    }
+
+    // Update active class on buttons
+    const switcher = document.getElementById('workspace-switcher');
+    if (switcher) {
+      switcher.querySelectorAll('.ws-btn').forEach((btn, bIdx) => {
+        btn.classList.toggle('active', bIdx === idx);
+      });
+    }
+
+    this.updateWorkspaceWindows();
+    this.showToast('Workspace', `Switched to Desktop ${idx + 1}`, 'info');
+  }
+
+  updateWorkspaceWindows() {
+    const currentWp = this.state.systemVars.currentWorkspace || 0;
+    
+    const container = document.getElementById('windows-container');
+    if (container) {
+      container.style.setProperty('--current-workspace', currentWp);
+    }
+    
+    document.querySelectorAll('.window').forEach(win => {
+      const appId = win.getAttribute('data-app');
+      const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+      if (proc) {
+        if (proc.workspace === undefined) proc.workspace = 0;
+        win.style.setProperty('--window-workspace', proc.workspace);
+        
+        // Hide windows in other workspaces
+        win.classList.toggle('hidden-workspace', proc.workspace !== currentWp);
+      }
+    });
+  }
+
+  toggleMissionControl() {
+    const container = document.getElementById('windows-container');
+    if (!container) return;
+
+    const isActive = container.classList.toggle('mission-control-active');
+    this.state.systemVars.missionControlActive = isActive;
+    
+    const windows = Array.from(document.querySelectorAll('.window:not(.hidden):not(.hidden-workspace)'));
+    if (!isActive) {
+      // Restore all windows: clear grid positions
+      windows.forEach(win => {
+        win.style.removeProperty('transform');
+        win.classList.remove('mc-window');
+        const titleEl = win.querySelector('.mc-title-label');
+        if (titleEl) titleEl.remove();
+      });
+      return;
+    }
+
+    // Grid layout calculations for open active windows
+    const count = windows.length;
+    if (count === 0) return;
+
+    const areaW = window.innerWidth;
+    const areaH = window.innerHeight - 36 - 60; // Menu bar + dock area height
+    const cols = Math.ceil(Math.sqrt(count));
+    const rows = Math.ceil(count / cols);
+
+    const cellW = areaW / cols;
+    const cellH = areaH / rows;
+
+    windows.forEach((win, idx) => {
+      win.classList.add('mc-window');
+      const r = Math.floor(idx / cols);
+      const c = idx % cols;
+
+      const appId = win.getAttribute('data-app');
+      const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+      if (!proc) return;
+
+      const winW = proc.w;
+      const winH = proc.h;
+
+      // Scale down and translate window to center of its cell
+      const padding = 60;
+      const scaleX = (cellW - padding) / winW;
+      const scaleY = (cellH - padding) / winH;
+      const scale = Math.min(0.45, scaleX, scaleY); // max scale 0.45
+
+      const cellCenterX = c * cellW + cellW / 2;
+      const cellCenterY = r * cellH + cellH / 2 + 36; // offset menu height
+
+      const currentLeft = proc.x;
+      const currentTop = proc.y;
+      
+      const targetX = cellCenterX - (winW * scale) / 2 - currentLeft;
+      const targetY = cellCenterY - (winH * scale) / 2 - currentTop;
+
+      win.style.transform = `translate3d(${targetX}px, ${targetY}px, 0) scale(${scale})`;
+      
+      let titleLabel = win.querySelector('.mc-title-label');
+      if (!titleLabel) {
+        titleLabel = document.createElement('div');
+        titleLabel.className = 'mc-title-label';
+        titleLabel.textContent = win.querySelector('.window-title').textContent;
+        win.appendChild(titleLabel);
+      }
+    });
+  }
+
+  restoreWorkspace() {
+    let openedCount = 0;
+    Object.keys(this.state.processes).forEach(appId => {
+      const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+      if (proc && proc.open) {
+        this.openApp(appId);
+        if (proc.minimized) this.minimizeApp(appId);
+        openedCount++;
+      }
+    });
+
+    if (openedCount === 0) {
+      this.openApp('editor');
+      this.openApp('tasks');
+      this.showToast('Workspace Restored', 'Opened default apps (Editor & Tasks).', 'success');
+    } else {
+      this.showToast('Workspace Restored', `Restored ${openedCount} applications.`, 'success');
+    }
   }
 
   snapActiveWindow(direction) {
@@ -852,63 +1086,205 @@ export class UIController {
   // Command Palette
   // ==========================================
   toggleCommandPalette() {
-    const palette = document.getElementById('command-palette');
-    if (!palette) return;
-    palette.classList.toggle('hidden');
-    if (!palette.classList.contains('hidden')) {
-      const input = palette.querySelector('#palette-search');
-      if (input) { input.value = ''; input.focus(); }
+    const dialog = document.getElementById('command-palette-dialog');
+    if (!dialog) return;
+    if (dialog.open) {
+      dialog.close();
+    } else {
+      dialog.showModal();
+      const input = dialog.querySelector('#palette-search-input');
+      if (input) {
+        input.value = '';
+        input.focus();
+        input.oninput = (e) => {
+          this.renderCommandPalette(e.target.value.trim());
+        };
+      }
       this.renderCommandPalette('');
     }
   }
 
+  getAllFiles(node = this.state.fs, path = '') {
+    let files = [];
+    if (!node) return files;
+    if (node.type === 'file') {
+      files.push({ path, name: path.split('/').pop() });
+    } else if (node.type === 'dir' && node.children) {
+      Object.keys(node.children).forEach(name => {
+        const child = Reflect.get(node.children, window.sanitizeKey(name));
+        files = files.concat(this.getAllFiles(child, path + '/' + name));
+      });
+    }
+    return files;
+  }
+
   renderCommandPalette(query) {
-    const content = document.getElementById('palette-content');
+    const content = document.querySelector('.palette-content');
     if (!content) return;
+
     const commands = [
-      { name: 'Open File Explorer', shortcut: '', action: () => this.openApp('explorer') },
-      { name: 'Open Code Editor', shortcut: '', action: () => this.openApp('editor') },
-      { name: 'Open Terminal', shortcut: '', action: () => this.openApp('terminal') },
-      { name: 'Open System Monitor', shortcut: '', action: () => this.openApp('sysmonitor') },
-      { name: 'Open Calculator', shortcut: '', action: () => this.openApp('calculator') },
-      { name: 'Open Browser', shortcut: '', action: () => this.openApp('browser') },
-      { name: 'Open Settings', shortcut: '', action: () => this.openApp('settings') },
-      { name: 'Open App Store', shortcut: '', action: () => this.openApp('appstore') },
-      { name: 'Open Memory Graph', shortcut: '', action: () => this.openApp('memory') },
-      { name: 'Open Task Board', shortcut: '', action: () => this.openApp('tasks') },
-      { name: 'Open AI Dashboard', shortcut: '', action: () => this.openApp('dashboard') },
-      { name: 'Open Device Manager', shortcut: '', action: () => this.openApp('devicemgr') },
-      { name: 'Open Disk Utility', shortcut: '', action: () => this.openApp('diskutil') },
-      { divider: true, name: 'System' },
-      { name: 'Lock Screen', shortcut: '⌘L', action: () => this.lockScreen() },
-      { name: 'Toggle Sidebar', shortcut: '⌘\\', action: () => document.getElementById('ai-sidebar')?.classList.toggle('collapsed') },
-      { name: 'Toggle AFK Mode', shortcut: '', action: () => this.toggleAFK() },
-      { name: 'Factory Reset', shortcut: '', action: () => { this.state.resetAllState(); location.reload(); } },
+      { name: 'Open File Explorer', type: 'app', action: () => this.openApp('explorer') },
+      { name: 'Open Code Editor', type: 'app', action: () => this.openApp('editor') },
+      { name: 'Open Terminal', type: 'app', action: () => this.openApp('terminal') },
+      { name: 'Open System Monitor', type: 'app', action: () => this.openApp('sysmonitor') },
+      { name: 'Open Calculator', type: 'app', action: () => this.openApp('calculator') },
+      { name: 'Open Browser', type: 'app', action: () => this.openApp('browser') },
+      { name: 'Open Settings', type: 'app', action: () => this.openApp('settings') },
+      { name: 'Open App Store', type: 'app', action: () => this.openApp('appstore') },
+      { name: 'Open Memory Graph', type: 'app', action: () => this.openApp('memory') },
+      { name: 'Open Task Board', type: 'app', action: () => this.openApp('tasks') },
+      { name: 'Open AI Dashboard', type: 'app', action: () => this.openApp('dashboard') },
+      { name: 'Open Device Manager', type: 'app', action: () => this.openApp('devicemgr') },
+      { name: 'Open Disk Utility', type: 'app', action: () => this.openApp('diskutil') },
+      { name: 'Open Daily Briefing', type: 'app', action: () => this.openApp('dailybriefing') },
+      { name: 'Lock Screen', type: 'sys', shortcut: '⌘L', action: () => this.lockScreen() },
+      { name: 'Toggle Sidebar', type: 'sys', shortcut: '⌘\\', action: () => document.getElementById('ai-sidebar')?.classList.toggle('collapsed') },
+      { name: 'Toggle AFK Mode', type: 'sys', action: () => this.toggleAFK() },
+      { name: 'Factory Reset', type: 'sys', action: () => { if (confirm('Factory reset Astra OS?')) { this.state.resetAllState(); location.reload(); } } }
     ];
 
-    const filtered = query ? commands.filter(c => !c.divider && c.name.toLowerCase().includes(query.toLowerCase())) : commands;
+    if (!query) {
+      let listHTML = `
+        <div class="palette-category">System Commands</div>
+        <ul class="palette-list">
+      `;
+      commands.forEach((c, idx) => {
+        const shortcut = c.shortcut ? `<span class="option-shortcut">${c.shortcut}</span>` : '';
+        listHTML += `
+          <li class="palette-option" data-type="command" data-idx="${idx}">
+            <span class="option-name">⚡ ${window.escapeHTML(c.name)}</span>
+            ${shortcut}
+          </li>
+        `;
+      });
+      listHTML += `
+        </ul>
+        <div class="palette-category">AI Orchestration Commands</div>
+        <ul class="palette-list">
+          <li class="palette-option" data-type="ai" data-command="ai-continue">
+            <span class="option-name">🤖 Continue active project task...</span>
+            <span class="option-desc">Auto-drafts, codes, and builds while tracking state</span>
+          </li>
+          <li class="palette-option" data-type="ai" data-command="ai-summarize">
+            <span class="option-name">🤖 Summarize active workspace</span>
+            <span class="option-desc">Generates workspace summary in Chat</span>
+          </li>
+          <li class="palette-option" data-type="ai" data-command="ai-organize">
+            <span class="option-name">🤖 Organize Project Directory</span>
+            <span class="option-desc">Cleans up files, links memories, and creates README</span>
+          </li>
+        </ul>
+      `;
+      window.renderSafeHTML(content, listHTML);
+
+      content.querySelectorAll('.palette-option').forEach(opt => {
+        opt.addEventListener('click', () => {
+          const type = opt.getAttribute('data-type');
+          if (type === 'command') {
+            const idx = parseInt(opt.getAttribute('data-idx'));
+            if (commands[idx]?.action) commands[idx].action();
+          } else if (type === 'ai') {
+            const cmd = opt.getAttribute('data-command');
+            const appInput = document.getElementById('chat-input-box');
+            if (appInput) {
+              if (cmd === 'ai-continue') appInput.value = 'Continue active tasks';
+              else if (cmd === 'ai-summarize') appInput.value = 'Summarize active workspace';
+              else if (cmd === 'ai-organize') appInput.value = 'Organize Project Directory';
+              appInput.focus();
+              const sendBtn = document.getElementById('send-chat-btn');
+              if (sendBtn) sendBtn.click();
+            }
+          }
+          const dialog = document.getElementById('command-palette-dialog');
+          if (dialog) dialog.close();
+        });
+      });
+      return;
+    }
 
     let listHTML = '';
-    filtered.forEach((c, i) => {
-      if (c.divider) {
-        listHTML += `<div class="palette-category">${escapeHTML(c.name)}</div>`;
-      } else {
-        const shortcutHTML = c.shortcut ? `<span class="option-shortcut">${escapeHTML(c.shortcut)}</span>` : '';
-        listHTML += `<li class="palette-option" data-idx="${i}"><span class="option-name">${escapeHTML(c.name)}</span>${shortcutHTML}</li>`;
-      }
-    });
 
-    window.renderSafeHTML(content, `
-      <ul class="palette-list">
-        ${listHTML}
-      </ul>
-    `);
+    const matchedCmds = commands.filter(c => c.name.toLowerCase().includes(query.toLowerCase()));
+    if (matchedCmds.length > 0) {
+      listHTML += `<div class="palette-category">Matching Commands</div><ul class="palette-list">`;
+      matchedCmds.forEach(c => {
+        const globalIdx = commands.indexOf(c);
+        listHTML += `
+          <li class="palette-option" data-type="command" data-idx="${globalIdx}">
+            <span class="option-name">⚡ ${window.escapeHTML(c.name)}</span>
+          </li>
+        `;
+      });
+      listHTML += `</ul>`;
+    }
+
+    const matchedFiles = this.getAllFiles().filter(f => f.path.toLowerCase().includes(query.toLowerCase()));
+    if (matchedFiles.length > 0) {
+      listHTML += `<div class="palette-category">Virtual Files</div><ul class="palette-list">`;
+      matchedFiles.forEach(f => {
+        listHTML += `
+          <li class="palette-option" data-type="file" data-path="${window.escapeHTML(f.path)}">
+            <span class="option-name">📄 ${window.escapeHTML(f.name)}</span>
+            <span class="option-desc">${window.escapeHTML(f.path)}</span>
+          </li>
+        `;
+      });
+      listHTML += `</ul>`;
+    }
+
+    const matchedTasks = this.state.agentTasks.filter(t => t.title.toLowerCase().includes(query.toLowerCase()) || t.desc.toLowerCase().includes(query.toLowerCase()));
+    if (matchedTasks.length > 0) {
+      listHTML += `<div class="palette-category">Agent Tasks</div><ul class="palette-list">`;
+      matchedTasks.forEach(t => {
+        listHTML += `
+          <li class="palette-option" data-type="task">
+            <span class="option-name">📋 ${window.escapeHTML(t.title)}</span>
+            <span class="option-desc">${window.escapeHTML(t.desc)} [${window.escapeHTML(t.assigned)}]</span>
+          </li>
+        `;
+      });
+      listHTML += `</ul>`;
+    }
+
+    const matchedMemories = this.state.memoryGraph.nodes.filter(n => n.label.toLowerCase().includes(query.toLowerCase()) || n.type.toLowerCase().includes(query.toLowerCase()));
+    if (matchedMemories.length > 0) {
+      listHTML += `<div class="palette-category">Semantic Memories</div><ul class="palette-list">`;
+      matchedMemories.forEach(n => {
+        listHTML += `
+          <li class="palette-option" data-type="memory">
+            <span class="option-name">🧠 ${window.escapeHTML(n.label)}</span>
+            <span class="option-desc">Type: ${window.escapeHTML(n.type)}</span>
+          </li>
+        `;
+      });
+      listHTML += `</ul>`;
+    }
+
+    if (listHTML === '') {
+      listHTML = `<div class="palette-no-results">No matches found for "${window.escapeHTML(query)}". Press Enter to query Astra.</div>`;
+    }
+
+    window.renderSafeHTML(content, listHTML);
 
     content.querySelectorAll('.palette-option').forEach(opt => {
       opt.addEventListener('click', () => {
-        const idx = parseInt(opt.getAttribute('data-idx'));
-        if (filtered[idx]?.action) filtered[idx].action();
-        this.toggleCommandPalette();
+        const type = opt.getAttribute('data-type');
+        if (type === 'command') {
+          const idx = parseInt(opt.getAttribute('data-idx'));
+          if (commands[idx]?.action) commands[idx].action();
+        } else if (type === 'file') {
+          const path = opt.getAttribute('data-path');
+          this.openApp('editor');
+          setTimeout(() => {
+            if (window.editorOpenFile) window.editorOpenFile(path);
+          }, 250);
+        } else if (type === 'task') {
+          this.openApp('tasks');
+        } else if (type === 'memory') {
+          this.openApp('memory');
+        }
+        const dialog = document.getElementById('command-palette-dialog');
+        if (dialog) dialog.close();
       });
     });
   }
@@ -927,6 +1303,9 @@ export class UIController {
   // Toast Notifications
   // ==========================================
   showToast(title, message, type = 'info') {
+    if (this.state.registry.system?.notificationsSilenced && type !== 'warning' && type !== 'error') {
+      return;
+    }
     const portal = document.getElementById('toast-portal');
     if (!portal) return;
     const iconMap = { info: '💠', success: '✅', error: '❌', warning: '⚠️' };

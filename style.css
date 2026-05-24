@@ -141,6 +141,43 @@ body {
   letter-spacing: 0.5px;
 }
 
+.workspace-switcher {
+  display: flex;
+  background-color: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  padding: 2px;
+  border-radius: 6px;
+  gap: 2px;
+  margin-left: 10px;
+}
+
+.ws-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, color 0.2s;
+}
+
+.ws-btn:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+}
+
+.ws-btn.active {
+  background-color: var(--color-primary);
+  color: var(--bg-main, #051424);
+  box-shadow: 0 0 5px var(--color-primary);
+}
+
 .menu-dropdown-trigger {
   color: var(--text-secondary);
   cursor: pointer;
@@ -312,7 +349,8 @@ body:not(.sidebar-collapsed) .desktop {
   overflow: hidden;
   z-index: 100;
   border: 1px solid var(--border-glass);
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease, z-index 0s;
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease, z-index 0s, visibility 0s;
+  transform: translate3d(calc((var(--window-workspace, 0) - var(--current-workspace, 0)) * 100vw), 0, 0);
 }
 
 .window.active {
@@ -321,9 +359,16 @@ body:not(.sidebar-collapsed) .desktop {
 }
 
 .window.minimized {
-  transform: scale(0.8) translateY(100px);
+  transform: translate3d(calc((var(--window-workspace, 0) - var(--current-workspace, 0)) * 100vw), 100px, 0) scale(0.8);
   opacity: 0;
   pointer-events: none;
+}
+
+.window.hidden-workspace {
+  pointer-events: none;
+  opacity: 0 !important;
+  visibility: hidden;
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease, z-index 0s, visibility 0s 0.5s;
 }
 
 .window-header {
@@ -1810,6 +1855,106 @@ dialog::backdrop {
   color: var(--text-muted);
 }
 
+.focus-mode-switches {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.focus-btn {
+  background-color: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex: 1;
+  font-weight: 500;
+}
+
+.focus-btn:hover {
+  background-color: rgba(255,255,255,0.08);
+  color: var(--text-primary);
+}
+
+.focus-btn.active {
+  background-color: var(--color-primary);
+  color: #000;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 8px var(--color-primary);
+}
+
+.conscience-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.conscience-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  border-left: 3px solid;
+}
+
+.conscience-card.error {
+  background-color: rgba(239, 68, 68, 0.1);
+  border-left-color: var(--color-red);
+  color: #fca5a5;
+}
+
+.conscience-card.warning {
+  background-color: rgba(245, 158, 11, 0.1);
+  border-left-color: var(--color-amber);
+  color: #fde047;
+}
+
+.conscience-card.info {
+  background-color: rgba(59, 130, 246, 0.1);
+  border-left-color: var(--color-blue);
+  color: #93c5fd;
+}
+
+.conscience-card.success {
+  background-color: rgba(16, 185, 129, 0.1);
+  border-left-color: var(--color-green);
+  color: #a7f3d0;
+}
+
+.conscience-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conscience-text {
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.conscience-action-btn {
+  background-color: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: var(--text-primary);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: all 0.2s;
+}
+
+.conscience-action-btn:hover {
+  background-color: rgba(255,255,255,0.2);
+}
+
 /* ==========================================
    Astra OS UI Additions
    Lock Screen, Context Menu, Calendar, Snapping, Notifications
@@ -3252,3 +3397,244 @@ dialog::backdrop {
   border: 2px solid rgba(255,255,255,0.2);
   padding: 0 4px;
 }
+
+/* Mission Control Overview (Window Grid) */
+.mission-control-active {
+  backdrop-filter: brightness(0.6) blur(5px);
+  -webkit-backdrop-filter: brightness(0.6) blur(5px);
+  transition: backdrop-filter 0.5s ease;
+}
+
+.window.mc-window {
+  cursor: pointer;
+  pointer-events: auto !important; /* Allow clicking to choose window */
+  user-select: none;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px hsla(var(--hue-primary), 100%, 50%, 0.15) !important;
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease, border-color 0.3s !important;
+}
+
+.window.mc-window:hover {
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 0 2px var(--color-primary) !important;
+  border-color: var(--color-primary) !important;
+}
+
+.window.mc-window:hover .mc-title-label {
+  background-color: var(--color-primary);
+  color: #000;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+}
+
+.mc-title-label {
+  position: absolute;
+  top: -38px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--bg-glass);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: background-color 0.2s, color 0.2s;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+  z-index: 99999;
+}
+
+/* Daily Briefing App */
+.dailybriefing-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 20px;
+  overflow: hidden;
+}
+
+.dailybriefing-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.dailybriefing-header h3 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.dailybriefing-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-glass);
+  padding-bottom: 8px;
+}
+
+.db-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.db-tab:hover {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.db-tab.active {
+  background-color: var(--bg-glass-light);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.dailybriefing-content {
+  flex-grow: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 4px;
+}
+
+.dailybriefing-card {
+  background: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dailybriefing-card h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 6px;
+}
+
+.dailybriefing-card p {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.dailybriefing-quote {
+  font-style: italic;
+  color: var(--text-muted);
+  border-left: 3px solid var(--color-primary);
+  padding-left: 12px;
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.dailybriefing-tasks-list, .dailybriefing-modified-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.db-task-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.db-task-item.completed {
+  opacity: 0.6;
+}
+
+.db-task-item.completed .db-task-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.db-task-check {
+  font-size: 14px;
+  user-select: none;
+}
+
+.db-task-title {
+  font-size: 12.5px;
+  flex-grow: 1;
+  color: var(--text-secondary);
+}
+
+.db-task-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.db-task-tag.pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-amber);
+}
+
+.db-task-tag.completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.db-file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.db-file-status {
+  font-weight: bold;
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.db-file-status.modified {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-amber);
+}
+
+.db-file-status.untracked {
+  background: rgba(6, 182, 212, 0.15);
+  color: var(--color-primary);
+}
+
+.db-file-status.new {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.dailybriefing-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+

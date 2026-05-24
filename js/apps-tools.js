@@ -337,3 +337,279 @@ window.AstraApps.notifcenter = function(container, ui) {
 
   render();
 };
+
+// ==========================================
+// 4. Daily Briefing & Evening Wrap-up App
+// ==========================================
+window.AstraApps.dailybriefing = function(container, ui) {
+  let activeTab = 'morning';
+  const quotes = [
+    { text: "The best way to predict the future is to invent it.", author: "Alan Kay" },
+    { text: "Simplicity is the ultimate sophistication.", author: "Leonardo da Vinci" },
+    { text: "Make it simple, but significant.", author: "Don Draper" },
+    { text: "Talk is cheap. Show me the code.", author: "Linus Torvalds" },
+    { text: "Quality is not an act, it is a habit.", author: "Aristotle" }
+  ];
+  const quote = quotes[Math.floor(Math.random() * quotes.length)];
+
+  function render() {
+    const state = ui.state;
+    const projectPath = '/home/divyanshu/Project_Astra';
+    
+    if (window.AstraKernel && !Reflect.get(state.gitRepos, projectPath)) {
+      window.AstraKernel.gitInit(projectPath);
+    }
+
+    const tasks = state.agentTasks || [];
+    const focusMode = state.registry?.system?.focusMode || 'none';
+    const activeProject = state.systemVars?.activeProject || 'None';
+
+    let contentHTML = '';
+
+    if (activeTab === 'morning') {
+      let tasksListHTML = '';
+      if (tasks.length === 0) {
+        tasksListHTML = '<div class="dailybriefing-empty">No tasks scheduled for today.</div>';
+      } else {
+        tasks.forEach(t => {
+          const isCompleted = t.status === 'completed';
+          const checkbox = isCompleted ? '☑' : '☐';
+          tasksListHTML += `
+            <div class="db-task-item ${isCompleted ? 'completed' : ''}">
+              <span class="db-task-check">${checkbox}</span>
+              <span class="db-task-title"><strong>${window.escapeHTML(t.title)}</strong> - ${window.escapeHTML(t.desc)}</span>
+              <span class="db-task-tag ${t.status}">${t.status}</span>
+            </div>
+          `;
+        });
+      }
+
+      const pendingTask = tasks.find(t => t.status !== 'completed');
+      const priorityText = pendingTask 
+        ? `Focus on completing: <strong>${window.escapeHTML(pendingTask.title)}</strong> (Assigned to ${window.escapeHTML(pendingTask.assigned || 'Agent')}).` 
+        : 'All tasks completed! Start planning the next iteration.';
+
+      contentHTML = `
+        <div class="dailybriefing-card">
+          <h4>🌅 Welcome, Divyanshu</h4>
+          <p>Active Project: <strong>${window.escapeHTML(activeProject)}</strong> | Focus: <strong>${window.escapeHTML(focusMode.toUpperCase())}</strong></p>
+          <div class="dailybriefing-quote">
+            "${window.escapeHTML(quote.text)}" — <em>${window.escapeHTML(quote.author)}</em>
+          </div>
+        </div>
+        <div class="dailybriefing-card">
+          <h4>📋 Today's Schedule & Tasks</h4>
+          <div class="dailybriefing-tasks-list">
+            ${tasksListHTML}
+          </div>
+        </div>
+        <div class="dailybriefing-card">
+          <h4>💡 Suggested Focus & Priorities</h4>
+          <p>${priorityText}</p>
+          <p style="font-size: 12px; color: var(--text-muted);">
+            Focus Tip: ${focusMode === 'deepwork' ? 'DND is active. Focus on coding blocks without interruption.' : 'Consider switching to Deep Work mode for distraction-free implementation.'}
+          </p>
+        </div>
+      `;
+    } else {
+      const completedTasks = tasks.filter(t => t.status === 'completed');
+      let accomplishmentsHTML = '';
+      if (completedTasks.length === 0) {
+        accomplishmentsHTML = '<p>No tasks marked completed today. Let\'s make progress tomorrow!</p>';
+      } else {
+        completedTasks.forEach(t => {
+          accomplishmentsHTML += `
+            <div class="db-task-item completed">
+              <span class="db-task-check">☑</span>
+              <span class="db-task-title"><strong>${window.escapeHTML(t.title)}</strong> - ${window.escapeHTML(t.desc)}</span>
+            </div>
+          `;
+        });
+      }
+
+      let gitStatusHTML = '';
+      let repoFilesHTML = '';
+      if (window.AstraKernel) {
+        const statusLines = window.AstraKernel.gitStatus(projectPath);
+        gitStatusHTML = statusLines.slice(0, 2).map(l => `<div>${window.escapeHTML(l)}</div>`).join('');
+        
+        const repo = Reflect.get(state.gitRepos, projectPath);
+        if (repo) {
+          const dir = state.resolvePath(projectPath);
+          const allFiles = window.AstraKernel.getFilesRecursive ? window.AstraKernel.getFilesRecursive(dir, projectPath) : [];
+          const lastCommitFiles = repo.commits.length > 0 ? Reflect.get(repo.commits, repo.commits.length - 1).files : [];
+          
+          const modified = allFiles.filter(f => !repo.staged.includes(f) && lastCommitFiles.includes(f));
+          const untracked = allFiles.filter(f => !repo.staged.includes(f) && !lastCommitFiles.includes(f));
+          const staged = repo.staged || [];
+
+          if (modified.length === 0 && untracked.length === 0 && staged.length === 0) {
+            repoFilesHTML = '<div class="dailybriefing-empty">Working tree is clean. No files modified.</div>';
+          } else {
+            staged.forEach(f => {
+              repoFilesHTML += `
+                <div class="db-file-item">
+                  <span>${window.escapeHTML(f)}</span>
+                  <span class="db-file-status new">staged (new)</span>
+                </div>
+              `;
+            });
+            modified.forEach(f => {
+              repoFilesHTML += `
+                <div class="db-file-item">
+                  <span>${window.escapeHTML(f)}</span>
+                  <span class="db-file-status modified">modified</span>
+                </div>
+              `;
+            });
+            untracked.forEach(f => {
+              repoFilesHTML += `
+                <div class="db-file-item">
+                  <span>${window.escapeHTML(f)}</span>
+                  <span class="db-file-status untracked">untracked</span>
+                </div>
+              `;
+            });
+          }
+        }
+      } else {
+        repoFilesHTML = '<div>Virtual Git Engine offline.</div>';
+      }
+
+      const nodes = state.memoryGraph?.nodes || [];
+      const recentMemories = nodes.slice(-3).map(n => `<li>${window.escapeHTML(n.label)}</li>`).join('');
+      const memoriesHTML = recentMemories ? `<ul>${recentMemories}</ul>` : '<p>No new memories recorded this session.</p>';
+
+      contentHTML = `
+        <div class="dailybriefing-card">
+          <h4>🏆 Today's Accomplishments</h4>
+          <div class="dailybriefing-tasks-list">
+            ${accomplishmentsHTML}
+          </div>
+        </div>
+        <div class="dailybriefing-card">
+          <h4>📦 Git Repository Status</h4>
+          <div style="font-family: var(--font-mono); font-size: 11px; margin-bottom: 8px; color: var(--text-secondary);">
+            ${gitStatusHTML}
+          </div>
+          <div class="dailybriefing-modified-list">
+            ${repoFilesHTML}
+          </div>
+        </div>
+        <div class="dailybriefing-card">
+          <h4>🧠 Memories & Context Learned</h4>
+          ${memoriesHTML}
+        </div>
+      `;
+    }
+
+    window.renderSafeHTML(container, `
+      <div class="dailybriefing-app">
+        <div class="dailybriefing-header">
+          <h3>📅 Daily Briefing</h3>
+          <button class="btn btn-primary btn-sm" id="db-export">Export to Documents</button>
+        </div>
+        <div class="dailybriefing-tabs">
+          <button class="db-tab ${activeTab === 'morning' ? 'active' : ''}" id="db-tab-morning">Morning Agenda</button>
+          <button class="db-tab ${activeTab === 'evening' ? 'active' : ''}" id="db-tab-evening">Evening Wrap-up</button>
+        </div>
+        <div class="dailybriefing-content">
+          ${contentHTML}
+        </div>
+      </div>
+    `);
+
+    container.querySelector('#db-tab-morning')?.addEventListener('click', () => {
+      activeTab = 'morning';
+      render();
+    });
+    container.querySelector('#db-tab-evening')?.addEventListener('click', () => {
+      activeTab = 'evening';
+      render();
+    });
+    container.querySelector('#db-export')?.addEventListener('click', () => {
+      exportBriefingDoc();
+    });
+  }
+
+  function exportBriefingDoc() {
+    const state = ui.state;
+    const projectPath = '/home/divyanshu/Project_Astra';
+    const focusMode = state.registry?.system?.focusMode || 'none';
+    const activeProject = state.systemVars?.activeProject || 'None';
+    const dateStr = new Date().toLocaleString();
+
+    let md = `# Daily Briefing — Astra OS\n`;
+    md += `**Timestamp**: ${dateStr}\n`;
+    md += `**User**: Divyanshu\n`;
+    md += `**Active Project**: ${activeProject}\n`;
+    md += `**Focus Mode**: ${focusMode.toUpperCase()}\n\n`;
+
+    md += `## 🌅 Morning Agenda\n`;
+    md += `- **Quote of the Day**: "${quote.text}" — ${quote.author}\n`;
+    md += `- **Active Tasks**:\n`;
+    const tasks = state.agentTasks || [];
+    if (tasks.length === 0) {
+      md += `  - No tasks scheduled.\n`;
+    } else {
+      tasks.forEach(t => {
+        const check = t.status === 'completed' ? '[x]' : '[ ]';
+        md += `  - ${check} ${t.title}: ${t.desc} (${t.status})\n`;
+      });
+    }
+
+    md += `\n## ## 🌃 Evening Wrap-up\n`;
+    const completed = tasks.filter(t => t.status === 'completed');
+    md += `- **Accomplishments**:\n`;
+    if (completed.length === 0) {
+      md += `  - No tasks completed today.\n`;
+    } else {
+      completed.forEach(t => {
+        md += `  - ${t.title}: ${t.desc}\n`;
+      });
+    }
+
+    md += `\n- **Git Repository Status**:\n`;
+    if (window.AstraKernel) {
+      const repo = Reflect.get(state.gitRepos, projectPath);
+      if (repo) {
+        const dir = state.resolvePath(projectPath);
+        const allFiles = window.AstraKernel.getFilesRecursive ? window.AstraKernel.getFilesRecursive(dir, projectPath) : [];
+        const lastCommitFiles = repo.commits.length > 0 ? Reflect.get(repo.commits, repo.commits.length - 1).files : [];
+        const modified = allFiles.filter(f => !repo.staged.includes(f) && lastCommitFiles.includes(f));
+        const untracked = allFiles.filter(f => !repo.staged.includes(f) && !lastCommitFiles.includes(f));
+        const staged = repo.staged || [];
+
+        md += `  - Branch: ${repo.branch}\n`;
+        md += `  - Staged files: ${staged.length > 0 ? staged.join(', ') : 'none'}\n`;
+        md += `  - Modified files: ${modified.length > 0 ? modified.join(', ') : 'none'}\n`;
+        md += `  - Untracked files: ${untracked.length > 0 ? untracked.join(', ') : 'none'}\n`;
+      } else {
+        md += `  - Git repository not initialized.\n`;
+      }
+    } else {
+      md += `  - Git engine offline.\n`;
+    }
+
+    md += `\n- **Memories Recorded**:\n`;
+    const nodes = state.memoryGraph?.nodes || [];
+    if (nodes.length === 0) {
+      md += `  - No memories recorded.\n`;
+    } else {
+      nodes.slice(-5).forEach(n => {
+        md += `  - ${n.label}\n`;
+      });
+    }
+
+    const filePath = '/home/divyanshu/Documents/daily_briefings.md';
+    const success = state.writeFile(filePath, md);
+    if (success) {
+      ui.showToast('Briefing Exported', `Saved to ${filePath}`, 'success');
+      state.addNotification('success', 'Daily Briefing', `Exported briefing to ${filePath}`);
+    } else {
+      ui.showToast('Export Failed', 'Unable to write to VFS path.', 'error');
+    }
+  }
+
+  render();
+};
