@@ -613,3 +613,444 @@ window.AstraApps.dailybriefing = function(container, ui) {
 
   render();
 };
+
+// ==========================================
+// 5. Trust & Safety Dashboard App
+// ==========================================
+window.AstraApps.trust = function(container, ui) {
+  function render() {
+    const state = ui.state;
+    const safety = state.registry.safety || {
+      writePolicy: 'ask',
+      commandPolicy: 'ask',
+      networkPolicy: 'approve',
+      settingsPolicy: 'ask',
+      confidenceThreshold: 85
+    };
+    
+    const safetyLevel = "100% SECURE";
+    const systemRisk = "LOW";
+    const safetyAgentVerdict = "Astra is operating within authorized security boundaries.";
+    
+    const auditLogs = state.auditLogs || [];
+    let auditRowsHTML = '';
+    if (auditLogs.length === 0) {
+      auditRowsHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No audit logs recorded yet.</td></tr>';
+    } else {
+      auditLogs.slice(-6).reverse().forEach(log => {
+        const isDangerous = log.action.includes('error') || log.action.includes('fail') || log.action.includes('denied');
+        const badgeClass = isDangerous ? 'warned' : 'verified';
+        const badgeText = isDangerous ? '⚠️ Warning' : '🛡️ Verified';
+        
+        auditRowsHTML += `
+          <tr>
+            <td style="font-family: var(--font-mono); font-size: 11px;">${log.timestamp}</td>
+            <td><strong>${window.escapeHTML(log.agent)}</strong></td>
+            <td>${window.escapeHTML(log.action)}</td>
+            <td><span class="trust-status-badge ${badgeClass}">${badgeText}</span></td>
+          </tr>
+        `;
+      });
+    }
+
+    let rollbackRowsHTML = '';
+    const orchestrator = ui.orchestrator;
+    const snapshots = orchestrator ? orchestrator.vfsSnapshots : {};
+    const modifiedPaths = Object.keys(snapshots || {});
+
+    if (modifiedPaths.length === 0) {
+      rollbackRowsHTML = '<div class="dailybriefing-empty">No files modified in the current session.</div>';
+    } else {
+      modifiedPaths.forEach(path => {
+        rollbackRowsHTML += `
+          <div class="db-file-item">
+            <span style="font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow:1; max-width: 180px;">${window.escapeHTML(path)}</span>
+            <button class="btn btn-secondary btn-sm trust-rollback-btn" data-path="${window.escapeHTML(path)}" style="border-color: var(--color-amber); color: var(--color-amber); background: rgba(245,158,11,0.05); padding: 2px 6px; font-size: 11px;">
+              ↩ Rollback
+            </button>
+          </div>
+        `;
+      });
+    }
+
+    window.renderSafeHTML(container, `
+      <div class="trust-app">
+        <div class="trust-header">
+          <h3>🛡️ Trust & Safety Dashboard</h3>
+          <span style="font-size: 11.5px; color: var(--text-secondary);">Security Context: <strong>${safetyLevel}</strong></span>
+        </div>
+        
+        <div class="trust-content">
+          <div class="trust-grid">
+            <div class="trust-panel">
+              <h4>Agent Autonomy Policies</h4>
+              <div class="trust-policy-row">
+                <span class="trust-policy-label">File Modification (Write)</span>
+                <select class="trust-policy-select" id="policy-write">
+                  <option value="ask" ${safety.writePolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
+                  <option value="approve" ${safety.writePolicy === 'approve' ? 'selected' : ''}>Auto-Approve Bounded</option>
+                  <option value="deny" ${safety.writePolicy === 'deny' ? 'selected' : ''}>Deny Autonomous Edit</option>
+                </select>
+              </div>
+              <div class="trust-policy-row">
+                <span class="trust-policy-label">Terminal Execution (Command)</span>
+                <select class="trust-policy-select" id="policy-command">
+                  <option value="ask" ${safety.commandPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
+                  <option value="approve" ${safety.commandPolicy === 'approve' ? 'selected' : ''}>Auto-Approve Safe</option>
+                  <option value="deny" ${safety.commandPolicy === 'deny' ? 'selected' : ''}>Deny Commands</option>
+                </select>
+              </div>
+              <div class="trust-policy-row">
+                <span class="trust-policy-label">Network Access</span>
+                <select class="trust-policy-select" id="policy-network">
+                  <option value="ask" ${safety.networkPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
+                  <option value="approve" ${safety.networkPolicy === 'approve' ? 'selected' : ''}>Allow Secure Only</option>
+                  <option value="deny" ${safety.networkPolicy === 'deny' ? 'selected' : ''}>Block Internet</option>
+                </select>
+              </div>
+              <div class="trust-policy-row">
+                <span class="trust-policy-label">Modify System Settings</span>
+                <select class="trust-policy-select" id="policy-settings">
+                  <option value="ask" ${safety.settingsPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
+                  <option value="approve" ${safety.settingsPolicy === 'approve' ? 'selected' : ''}>Auto-Approve Non-Core</option>
+                  <option value="deny" ${safety.settingsPolicy === 'deny' ? 'selected' : ''}>Block All Changes</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="trust-panel">
+              <h4>Safety Agent Context</h4>
+              <p style="font-size: 13px; margin: 2px 0;">Risk Level Assessment: <strong style="color: var(--color-green);">${systemRisk}</strong></p>
+              
+              <div class="trust-slider-container">
+                <div class="trust-slider-label">
+                  <span>Confidence Threshold Escalation</span>
+                  <span id="threshold-val"><strong>${safety.confidenceThreshold}%</strong></span>
+                </div>
+                <input type="range" class="trust-slider" id="threshold-slider" min="50" max="100" value="${safety.confidenceThreshold}">
+              </div>
+              
+              <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-top: 4px;">
+                <em>Verdict: ${safetyAgentVerdict}</em>
+                <br>
+                Confidence score below <strong>${safety.confidenceThreshold}%</strong> forces uncertainty escalation and prompts the user for approval.
+              </p>
+            </div>
+          </div>
+
+          <div class="trust-grid" style="grid-template-columns: 1fr 1.2fr;">
+            <div class="trust-panel">
+              <h4>Active File Rollback Center</h4>
+              <div class="dailybriefing-tasks-list" style="max-height: 160px; overflow-y: auto;">
+                ${rollbackRowsHTML}
+              </div>
+            </div>
+
+            <div class="trust-panel" style="overflow-x: auto;">
+              <h4>Safety Audit Trail</h4>
+              <table class="trust-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Agent</th>
+                    <th>Action</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${auditRowsHTML}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    `);
+
+    container.querySelectorAll('.trust-policy-select').forEach(select => {
+      select.addEventListener('change', () => {
+        const policyKey = select.id.replace('policy-', '') + 'Policy';
+        if (!state.registry.safety) state.registry.safety = {};
+        state.registry.safety[policyKey] = select.value;
+        state.saveState();
+        ui.showToast('Policy Updated', `Set ${select.id.replace('policy-', '')} access to ${select.value}.`, 'success');
+      });
+    });
+
+    const slider = container.querySelector('#threshold-slider');
+    if (slider) {
+      slider.addEventListener('input', (e) => {
+        container.querySelector('#threshold-val strong').textContent = `${e.target.value}%`;
+      });
+      slider.addEventListener('change', (e) => {
+        if (!state.registry.safety) state.registry.safety = {};
+        state.registry.safety.confidenceThreshold = parseInt(e.target.value);
+        state.saveState();
+        ui.showToast('Escalation Slider', `Confidence threshold updated to ${e.target.value}%.`, 'info');
+      });
+    }
+
+    container.querySelectorAll('.trust-rollback-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const path = btn.getAttribute('data-path');
+        if (orchestrator && snapshots[path] !== undefined) {
+          const original = snapshots[path];
+          if (original === null) {
+            state.deleteFile(path);
+          } else {
+            state.writeFile(path, original);
+          }
+          delete snapshots[path];
+          
+          const textarea = document.getElementById('editor-text-area');
+          const activeFile = document.getElementById('context-file')?.textContent;
+          if (activeFile && path.endsWith(activeFile) && textarea) {
+            textarea.value = original || '';
+          }
+          const editorContent = document.getElementById('editor-content');
+          if (editorContent) {
+            const tabActive = document.querySelector('.editor-tab.active span')?.textContent;
+            if (tabActive && path.endsWith(tabActive)) {
+              editorContent.value = original || '';
+            }
+          }
+
+          ui.showToast('File Rolled Back', `Reverted modifications in ${path.split('/').pop()}`, 'success');
+          state.addNotification('success', 'Security Rollback', `Rolled back changes in ${path}`);
+          render();
+          if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+        }
+      });
+    });
+  }
+
+  render();
+};
+
+// ==========================================
+// 6. Cognitive Timeline & Capsules App
+// ==========================================
+window.AstraApps.timeline = function(container, ui) {
+  let activeTimelineTab = 'timeline';
+  
+  function render() {
+    const state = ui.state;
+    const capsules = state.registry.system?.capsules || [];
+    const auditLogs = state.auditLogs || [];
+    
+    const pulseValues = [30, 45, 60, 25, 80, 95, 75, 40, 65, 85, 90, 50, 70, 94];
+    const pulseBarsHTML = pulseValues.map(v => `
+      <div class="work-pulse-bar" style="height: ${v}%" title="Work Pulse Intensity: ${v}%"></div>
+    `).join('');
+
+    let tabContentHTML = '';
+
+    if (activeTimelineTab === 'timeline') {
+      let timelineEventsHTML = '';
+      if (auditLogs.length === 0) {
+        timelineEventsHTML = '<div class="dailybriefing-empty">No work timeline activity logged.</div>';
+      } else {
+        auditLogs.slice(-10).reverse().forEach(log => {
+          let emoji = '⚙️';
+          if (log.agent === 'User') emoji = '👤';
+          else if (log.agent.includes('Planner')) emoji = '📋';
+          else if (log.agent.includes('Executor')) emoji = '⚡';
+          else if (log.agent.includes('Watcher')) emoji = '🔍';
+          else if (log.agent.includes('Memory')) emoji = '🧠';
+          else if (log.agent.includes('Safety')) emoji = '🛡️';
+          
+          timelineEventsHTML += `
+            <div class="timeline-event">
+              <span class="timeline-event-time">[${log.timestamp}]</span>
+              <div class="timeline-event-body">
+                <strong>${emoji} ${window.escapeHTML(log.agent)}</strong>: ${window.escapeHTML(log.action)}
+              </div>
+            </div>
+          `;
+        });
+      }
+
+      tabContentHTML = `
+        <div class="timeline-grid">
+          <div class="timeline-panel">
+            <h4>Cognitive Activity Stream</h4>
+            <div class="timeline-scroll" style="max-height: 320px; overflow-y: auto; padding-top: 10px;">
+              ${timelineEventsHTML}
+            </div>
+          </div>
+          
+          <div class="timeline-panel">
+            <h4>Work Pulse Momentum</h4>
+            <p>Calculated velocity of active files edited, terminal builds, and agent operations.</p>
+            <div class="work-pulse-chart">
+              ${pulseBarsHTML}
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+              <span>10:00 AM</span>
+              <span>1:00 PM</span>
+              <span>4:30 PM (Peak)</span>
+              <span>Current</span>
+            </div>
+            <p style="font-size: 13px; margin-top: 10px;">
+              Current Focus Momentum: <strong style="color: var(--color-primary);">94% (High Velocity)</strong>
+            </p>
+          </div>
+        </div>
+      `;
+    } else if (activeTimelineTab === 'capsules') {
+      let capsuleCardsHTML = '';
+      capsules.forEach(capsule => {
+        capsuleCardsHTML += `
+          <div class="capsule-card" data-capsule-id="${window.escapeHTML(capsule.id)}">
+            <div class="capsule-name">🎒 ${window.escapeHTML(capsule.name)}</div>
+            <div class="capsule-desc">${window.escapeHTML(capsule.description)}</div>
+            <div class="capsule-meta">Apps: ${capsule.openApps.join(', ')} | Focus: ${capsule.focusMode.toUpperCase()}</div>
+          </div>
+        `;
+      });
+
+      tabContentHTML = `
+        <div class="timeline-grid" style="grid-template-columns: 1.2fr 1fr;">
+          <div class="timeline-panel">
+            <h4>Saved AI Session Capsules</h4>
+            <p>Restore workspace capsules to instantly reconstruct active tabs, file selections, and focus settings.</p>
+            <div class="capsule-grid" style="max-height: 300px; overflow-y: auto;">
+              ${capsuleCardsHTML}
+            </div>
+          </div>
+          
+          <div class="timeline-panel">
+            <h4>Take AI Session Capsule</h4>
+            <p>Snapshots list of currently open windows, their positions, active focus mode, and active file context.</p>
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+              <input type="text" class="browser-newtab-input" id="capsule-name-input" placeholder="Capsule Name (e.g. Satellite Defense)" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border-glass); border-radius: 4px; padding: 8px; color: #fff;">
+              <button class="btn btn-primary" id="save-capsule-btn">🎒 Snapshot Current Session</button>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      tabContentHTML = `
+        <div class="timeline-grid" style="grid-template-columns: 1.2fr 1fr;">
+          <div class="timeline-panel">
+            <h4>Active Project Twins</h4>
+            <p>Autonomous AI representation of your repository directory state that synchs and runs background routines while you are away.</p>
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px;">
+              <div class="twin-item">
+                <div>
+                  <strong>🛰️ Satellite_Defense_Twin</strong>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Path: /Satellite_Defense | Telemetry avoid</div>
+                </div>
+                <span class="twin-status-pill active">ACTIVE</span>
+              </div>
+              <div class="twin-item">
+                <div>
+                  <strong>🚀 Project_Astra_Twin</strong>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Path: /Project_Astra | Council routing</div>
+                </div>
+                <span class="twin-status-pill active">ACTIVE</span>
+              </div>
+            </div>
+          </div>
+          <div class="timeline-panel">
+            <h4>Twin Task Ingestion</h4>
+            <p style="font-size: 13px; line-height: 1.4; color: var(--text-secondary);">
+              Project twins automatically listen to local workspace file changes and queue optimization checks in the Watcher agent. When you are AFK, the twins ingest code edits and run compile sanity routines seamlessly.
+            </p>
+          </div>
+        </div>
+      `;
+    }
+
+    window.renderSafeHTML(container, `
+      <div class="timeline-app">
+        <div class="timeline-header">
+          <h3>⏳ Cognitive Timeline & Capsules</h3>
+          <div class="dailybriefing-tabs" style="margin: 0; border: none; padding: 0;">
+            <button class="db-tab ${activeTimelineTab === 'timeline' ? 'active' : ''}" id="tl-tab-timeline">Activity Timeline</button>
+            <button class="db-tab ${activeTimelineTab === 'capsules' ? 'active' : ''}" id="tl-tab-capsules">Session Capsules</button>
+            <button class="db-tab ${activeTimelineTab === 'twins' ? 'active' : ''}" id="tl-tab-twins">Project Twins</button>
+          </div>
+        </div>
+        
+        <div class="timeline-content">
+          ${tabContentHTML}
+        </div>
+      </div>
+    `);
+
+    container.querySelector('#tl-tab-timeline')?.addEventListener('click', () => { activeTimelineTab = 'timeline'; render(); });
+    container.querySelector('#tl-tab-capsules')?.addEventListener('click', () => { activeTimelineTab = 'capsules'; render(); });
+    container.querySelector('#tl-tab-twins')?.addEventListener('click', () => { activeTimelineTab = 'twins'; render(); });
+
+    container.querySelector('#save-capsule-btn')?.addEventListener('click', () => {
+      const nameInput = container.querySelector('#capsule-name-input');
+      const name = nameInput ? nameInput.value.trim() : '';
+      if (!name) {
+        ui.showToast('Failed to Save Capsule', 'Please enter a capsule name.', 'error');
+        return;
+      }
+      
+      const openApps = [];
+      Object.keys(state.processes).forEach(appId => {
+        const proc = Reflect.get(state.processes, window.sanitizeKey(appId));
+        if (proc && proc.open) openApps.push(appId);
+      });
+      const focusMode = state.registry.system.focusMode || 'coding';
+      const activeFile = document.getElementById('context-file')?.textContent || '';
+      
+      const newCapsule = {
+        id: 'capsule-' + Date.now(),
+        name: name,
+        focusMode: focusMode,
+        activeFile: activeFile,
+        openApps: openApps,
+        description: `User snapped state containing ${openApps.length} active apps.`
+      };
+      
+      if (!state.registry.system.capsules) state.registry.system.capsules = [];
+      state.registry.system.capsules.push(newCapsule);
+      state.saveState();
+      
+      ui.showToast('Capsule Saved', `Session capsule "${name}" captured.`, 'success');
+      state.addNotification('success', 'Timeline & Capsules', `Saved session capsule: ${name}`);
+      render();
+    });
+
+    container.querySelectorAll('.capsule-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const id = card.getAttribute('data-capsule-id');
+        const capsule = capsules.find(c => c.id === id);
+        if (capsule) {
+          restoreCapsuleState(capsule);
+        }
+      });
+    });
+  }
+
+  function restoreCapsuleState(capsule) {
+    const state = ui.state;
+    Object.keys(state.processes).forEach(appId => {
+      ui.closeApp(appId);
+    });
+    
+    ui.setFocusMode(capsule.focusMode);
+    
+    capsule.openApps.forEach(appId => {
+      ui.openApp(appId);
+    });
+    
+    if (capsule.activeFile) {
+      ui.openApp('editor');
+      setTimeout(() => {
+        if (window.editorOpenFile) window.editorOpenFile(capsule.activeFile);
+      }, 300);
+    }
+    
+    ui.showToast('Capsule Restored', `Restored capsule "${capsule.name}"`, 'success');
+    state.addNotification('success', 'Capsule Engine', `Successfully restored work capsule: ${capsule.name}`);
+    render();
+  }
+
+  render();
+};

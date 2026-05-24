@@ -545,7 +545,9 @@ export class UIController {
       devicemgr: '🛠️ Device Manager',
       diskutil: '💾 Disk Utility',
       calculator: '🧮 Calculator',
-      dailybriefing: '📅 Daily Briefing'
+      dailybriefing: '📅 Daily Briefing',
+      trust: '🛡️ Trust & Safety',
+      timeline: '⏳ Cognitive Timeline'
     };
     const title = Reflect.get(titles, appId) || (appId.charAt(0).toUpperCase() + appId.slice(1));
     const win = document.createElement('div');
@@ -885,7 +887,7 @@ export class UIController {
       }
       this.showToast('Focus Mode', 'Deep Work Mode activated (DND on)', 'warning');
 
-      const nonEssential = ['calculator', 'browser', 'appstore', 'sysmonitor', 'devicemgr', 'diskutil', 'dailybriefing'];
+      const nonEssential = ['calculator', 'browser', 'appstore', 'sysmonitor', 'devicemgr', 'diskutil', 'dailybriefing', 'trust', 'timeline'];
       nonEssential.forEach(appId => {
         const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
         if (proc && proc.open && !proc.minimized) {
@@ -1137,6 +1139,8 @@ export class UIController {
       { name: 'Open Device Manager', type: 'app', action: () => this.openApp('devicemgr') },
       { name: 'Open Disk Utility', type: 'app', action: () => this.openApp('diskutil') },
       { name: 'Open Daily Briefing', type: 'app', action: () => this.openApp('dailybriefing') },
+      { name: 'Open Trust & Safety Dashboard', type: 'app', action: () => this.openApp('trust') },
+      { name: 'Open Cognitive Timeline', type: 'app', action: () => this.openApp('timeline') },
       { name: 'Lock Screen', type: 'sys', shortcut: '⌘L', action: () => this.lockScreen() },
       { name: 'Toggle Sidebar', type: 'sys', shortcut: '⌘\\', action: () => document.getElementById('ai-sidebar')?.classList.toggle('collapsed') },
       { name: 'Toggle AFK Mode', type: 'sys', action: () => this.toggleAFK() },

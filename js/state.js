@@ -102,6 +102,53 @@ export class OSState {
           this.processes.dailybriefing = { open: false, minimized: false, x: 220, y: 120, w: 680, h: 480, zIndex: 23 };
           this.saveState();
         }
+        if (!this.processes.trust) {
+          this.processes.trust = { open: false, minimized: false, x: 140, y: 90, w: 720, h: 500, zIndex: 24 };
+          this.saveState();
+        }
+        if (!this.processes.timeline) {
+          this.processes.timeline = { open: false, minimized: false, x: 260, y: 130, w: 700, h: 480, zIndex: 25 };
+          this.saveState();
+        }
+        if (!this.registry.safety) {
+          this.registry.safety = {
+            writePolicy: 'ask',
+            commandPolicy: 'ask',
+            networkPolicy: 'approve',
+            settingsPolicy: 'ask',
+            confidenceThreshold: 85
+          };
+          this.saveState();
+        }
+        if (!this.registry.system.capsules) {
+          this.registry.system.capsules = [
+            {
+              id: 'capsule-satellite',
+              name: 'AI Satellite Defense Project',
+              focusMode: 'deepwork',
+              activeFile: '/Satellite_Defense/control.js',
+              openApps: ['editor', 'terminal', 'trust'],
+              description: 'Satellite telemetry feeds, collision avoidance algorithms, active warning grid.'
+            },
+            {
+              id: 'capsule-astra',
+              name: 'Project Astra Core Gateway',
+              focusMode: 'coding',
+              activeFile: '/Project_Astra/index.js',
+              openApps: ['editor', 'tasks', 'dashboard'],
+              description: 'Gateway route initializer for Express, websocket interfaces.'
+            },
+            {
+              id: 'capsule-research',
+              name: 'Research Mode: Agent Architectures',
+              focusMode: 'research',
+              activeFile: '/Project_Astra/README.md',
+              openApps: ['browser', 'memory', 'timeline'],
+              description: 'Comparing multi-agent routing engines and vector memory strategies.'
+            }
+          ];
+          this.saveState();
+        }
 
         if (Object.keys(this.fs).length > 0) {
           return;
@@ -218,6 +265,10 @@ export class OSState {
           'README.md': mkFile('README.md', `# Project Astra\n\nAstra is an experimental autonomous agent gateway built with a micro-agent architecture.\n\n## Architecture\n- PlannerAgent: Breaks user prompt into subtasks.\n- ExecutorAgent: Modifies file contents and runs builds.\n- WatcherAgent: Catches runtime execution failures.\n- MemoryAgent: Relates active state to the database.\n\n## Quickstart\nRun \`npm install\` to install dependencies.\nRun \`npm run build\` to verify correct assembly.\n`),
           'index.js': mkFile('index.js', `// ==========================================\n// Project Astra Gateway Route Initializer\n// ==========================================\nconst express = require('express');\nconst app = express();\nconst PORT = process.env.PORT || 8080;\n\napp.use(express.json());\n\n// Base Health Check\napp.get('/health', (req, res) => {\n  res.status(200).json({ status: 'healthy', timestamp: Date.now() });\n});\n\n// TODO: Implement the express endpoints for agent council communication\n// The Planner agent must be able to POST steps to this route.\n// Executor agent will hook into the WebSocket server.\n\napp.listen(PORT, () => {\n  console.log(\`[Astra] Gateway listening on port \${PORT}\`);\n});\n`),
           'package.json': mkFile('package.json', `{\n  "name": "project-astra-gateway",\n  "version": "1.0.0",\n  "description": "Gateway route initializer for Astra",\n  "main": "index.js",\n  "scripts": {\n    "start": "node index.js",\n    "build": "node -c index.js",\n    "test": "echo \\"Error: no test specified\\" && exit 0"\n  },\n  "dependencies": {\n    "express": "^4.19.2"\n  }\n}`)
+        }),
+        'Satellite_Defense': mkDir('Satellite_Defense', {
+          'README.md': mkFile('README.md', `# AI Satellite Defense Project\n\nSimulating orbital telemetry streams, hazard avoidance collision maneuvers, and communication links.\n\n## Operations\n- Telemetry ingestion from constellation.\n- Threat/Debris detection logic.\n- Thruster ignition sequences.\n`),
+          'control.js': mkFile('control.js', `// ==========================================\n// Satellite Telemetry Avoidance Control\n// ==========================================\nconst Telemetry = {\n  status: "nominal",\n  altitude: 540.2, // km\n  velocity: 7.8, // km/s\n  heading: 182.4, // deg\n  debrisAlert: false\n};\n\nfunction verifyCollisionPath(objectTrack) {\n  console.log(\`[Defense] Checking trajectory against tracks...\`);\n  // TODO: Implement proximity calculations\n  return false;\n}\n\nfunction initiateEvasiveManeuver() {\n  console.log("[Defense] WARNING: Threat detected. Initiating thrust cycle.");\n  Telemetry.status = "maneuver";\n  Telemetry.altitude += 2.5; // elevate orbit\n}\n\n// Monitoring loop\nsetInterval(() => {\n  console.log(\`[Defense] Status: \${Telemetry.status} | Altitude: \${Telemetry.altitude} km\`);\n}, 5000);\n`)
         })
       })
     };
@@ -327,13 +378,46 @@ export class OSState {
         requirePasswordOnWake: true,
         enforcePermissions: true
       },
+      safety: {
+        writePolicy: 'ask',
+        commandPolicy: 'ask',
+        networkPolicy: 'approve',
+        settingsPolicy: 'ask',
+        confidenceThreshold: 85
+      },
       system: {
         hostname: 'astra-desktop',
         startupApps: ['editor', 'tasks'],
         defaultShell: '/bin/sh',
         timeFormat: '12h',
         soundEnabled: true,
-        focusMode: 'coding'
+        focusMode: 'coding',
+        capsules: [
+          {
+            id: 'capsule-satellite',
+            name: 'AI Satellite Defense Project',
+            focusMode: 'deepwork',
+            activeFile: '/Satellite_Defense/control.js',
+            openApps: ['editor', 'terminal', 'trust'],
+            description: 'Satellite telemetry feeds, collision avoidance algorithms, active warning grid.'
+          },
+          {
+            id: 'capsule-astra',
+            name: 'Project Astra Core Gateway',
+            focusMode: 'coding',
+            activeFile: '/Project_Astra/index.js',
+            openApps: ['editor', 'tasks', 'dashboard'],
+            description: 'Gateway route initializer for Express, websocket interfaces.'
+          },
+          {
+            id: 'capsule-research',
+            name: 'Research Mode: Agent Architectures',
+            focusMode: 'research',
+            activeFile: '/Project_Astra/README.md',
+            openApps: ['browser', 'memory', 'timeline'],
+            description: 'Comparing multi-agent routing engines and vector memory strategies.'
+          }
+        ]
       },
       keybindings: {
         commandPalette: 'Cmd+K',
@@ -372,7 +456,9 @@ export class OSState {
       'appstore': { open: false, minimized: false, x: 160, y: 80, w: 720, h: 500, zIndex: 20 },
       'devicemgr': { open: false, minimized: false, x: 250, y: 120, w: 600, h: 440, zIndex: 21 },
       'diskutil': { open: false, minimized: false, x: 300, y: 140, w: 640, h: 420, zIndex: 22 },
-      'dailybriefing': { open: false, minimized: false, x: 220, y: 120, w: 680, h: 480, zIndex: 23 }
+      'dailybriefing': { open: false, minimized: false, x: 220, y: 120, w: 680, h: 480, zIndex: 23 },
+      'trust': { open: false, minimized: false, x: 140, y: 90, w: 720, h: 500, zIndex: 24 },
+      'timeline': { open: false, minimized: false, x: 260, y: 130, w: 700, h: 480, zIndex: 25 }
     };
   }
 

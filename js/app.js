@@ -324,6 +324,93 @@ function bootOS() {
 
     const lower = prompt.toLowerCase();
     
+    // 1. "Continue my AI satellite defense project" / "Continue satellite defense"
+    if (lower.includes('satellite defense') || lower.includes('satellite_defense')) {
+      appendChatBubble("Reconstructing workspace context for <strong>AI Satellite Defense Project</strong>... Restoring active session capsule, switching to Deep Work focus mode, and opening satellite control files.", 'assistant');
+      setTimeout(() => {
+        const capsules = state.registry.system?.capsules || [];
+        const satelliteCapsule = capsules.find(c => c.id === 'capsule-satellite');
+        if (satelliteCapsule) {
+          Object.keys(state.processes).forEach(appId => {
+            ui.closeApp(appId);
+          });
+          ui.setFocusMode(satelliteCapsule.focusMode);
+          satelliteCapsule.openApps.forEach(appId => {
+            ui.openApp(appId);
+          });
+          if (satelliteCapsule.activeFile) {
+            ui.openApp('editor');
+            setTimeout(() => {
+              if (window.editorOpenFile) window.editorOpenFile(satelliteCapsule.activeFile);
+            }, 300);
+          }
+        }
+      }, 1000);
+      return;
+    }
+
+    // 2. "Resume the dashboard we worked on yesterday" / "Resume dashboard"
+    if (lower.includes('resume the dashboard') || lower.includes('resume dashboard')) {
+      appendChatBubble("Reconstructing workspace context for <strong>Project Astra Core Gateway</strong>... Loading active session capsule and focus settings.", 'assistant');
+      setTimeout(() => {
+        const capsules = state.registry.system?.capsules || [];
+        const astraCapsule = capsules.find(c => c.id === 'capsule-astra');
+        if (astraCapsule) {
+          Object.keys(state.processes).forEach(appId => {
+            ui.closeApp(appId);
+          });
+          ui.setFocusMode(astraCapsule.focusMode);
+          astraCapsule.openApps.forEach(appId => {
+            ui.openApp(appId);
+          });
+          if (astraCapsule.activeFile) {
+            ui.openApp('editor');
+            setTimeout(() => {
+              if (window.editorOpenFile) window.editorOpenFile(astraCapsule.activeFile);
+            }, 300);
+          }
+        }
+      }, 1000);
+      return;
+    }
+
+    // 3. "What changed since last session" / "What changed while I was away"
+    if (lower.includes('what changed') || lower.includes('since last session') || lower.includes('while i was away')) {
+      appendChatBubble("Opening <strong>Daily Briefing</strong> on your Evening Wrap-up accomplishments tab so you can audit recent changes, repository updates, and agent activities.", 'assistant');
+      setTimeout(() => {
+        ui.openApp('dailybriefing');
+        setTimeout(() => {
+          const eveningTabBtn = document.getElementById('db-tab-evening');
+          if (eveningTabBtn) eveningTabBtn.click();
+        }, 300);
+      }, 800);
+      return;
+    }
+
+    // 4. "Prepare a summary of unresolved tasks" / "unresolved tasks"
+    if (lower.includes('unresolved tasks') || lower.includes('pending tasks')) {
+      const pendingCount = state.agentTasks.filter(t => t.status !== 'completed').length;
+      appendChatBubble(`I scanned your task board and found <strong>${pendingCount} unresolved tasks</strong> remaining. Opening the Tasks Board app.`, 'assistant');
+      setTimeout(() => {
+        ui.openApp('tasks');
+      }, 500);
+      return;
+    }
+
+    // 5. "Finish organizing the research notes" / "organize notes" / "meeting notes"
+    if (lower.includes('organize') && lower.includes('notes') || lower.includes('meeting notes')) {
+      const notesContent = `- Team Meeting Notes: Orbit trajectory adjustments resolved.\n- Collisions risk verified below 0.01%.\n- WatcherAgent verified Express endpoints compile smoothly.\n- Next milestone: WebSocket telemetry streams integration.\n`;
+      state.writeFile('/home/divyanshu/Documents/meeting_notes.txt', notesContent);
+      appendChatBubble("Organizing and compiling your recent research/meeting notes... I have saved the structured notes to <strong>/home/divyanshu/Documents/meeting_notes.txt</strong> in the VFS and opened it in the Code Editor.", 'assistant');
+      setTimeout(() => {
+        ui.openApp('editor');
+        setTimeout(() => {
+          if (window.editorOpenFile) window.editorOpenFile('/home/divyanshu/Documents/meeting_notes.txt');
+        }, 300);
+      }, 800);
+      return;
+    }
+
     // Check if it requests to execute/continue tasks
     if (lower.includes('continue') || lower.includes('build') || lower.includes('implement') || lower.includes('test') || lower.includes('run') || lower.includes('finish')) {
       appendChatBubble("I'll analyze the project workspace context, formulate a detailed task list, and begin executing. You can follow my progress in the Task Board and Terminal windows.", 'assistant');
