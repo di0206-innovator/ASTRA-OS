@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Astra OS — AI-First Desktop Experience</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- System Background and Wallpaper -->
+  <div class="os-wallpaper"></div>
+  <div class="os-grid-overlay"></div>
+
+  <!-- Lock Screen Overlay -->
+  <div id="lock-screen" class="lock-screen-overlay hidden">
+    <div class="lock-screen-content">
+      <div class="lock-clock">
+        <div id="lock-time">12:00</div>
+        <div id="lock-date">Friday, May 22</div>
+      </div>
+      <div class="lock-user">
+        <div class="lock-avatar">D</div>
+        <div class="lock-name">Divyanshu</div>
+      </div>
+      <form id="lock-form" class="lock-form">
+        <input type="password" id="lock-password" class="lock-input" placeholder="Enter Password (1234)">
+        <button type="submit" class="lock-btn">→</button>
+      </form>
+      <div id="lock-error" class="lock-error"></div>
+    </div>
+  </div>
+
+  <!-- Window Snapping Zones -->
+  <div id="snap-zone-left" class="snap-zone snap-left"></div>
+  <div id="snap-zone-right" class="snap-zone snap-right"></div>
+  <div id="snap-zone-top" class="snap-zone snap-top"></div>
+
+  <!-- Global Context Menu -->
+  <div id="context-menu" class="context-menu hidden"></div>
+
+  <!-- Top Menu Bar (macOS style) -->
+  <header id="menu-bar" class="menu-bar">
+    <div class="menu-left">
+      <div class="menu-logo" id="menu-logo-btn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2L2 22h20L12 2zm0 4l6.4 12.8H5.6L12 6z" fill="currentColor"/>
+          <circle cx="12" cy="13" r="2.5" fill="currentColor"/>
+        </svg>
+      </div>
+      <span class="menu-title active-app-title" id="active-app-indicator">Finder</span>
+      <div class="menu-dropdown-trigger">File</div>
+      <div class="menu-dropdown-trigger">Edit</div>
+      <div class="menu-dropdown-trigger">View</div>
+      <div class="menu-dropdown-trigger">Go</div>
+      <div class="menu-dropdown-trigger">Developer</div>
+      <div class="menu-dropdown-trigger">Help</div>
+    </div>
+    <div class="menu-right">
+      <!-- Agent status indicator badge -->
+      <div class="agent-status-pill" id="agent-status-pill">
+        <span class="status-pulse"></span>
+        <span class="status-text">Astra: Idle</span>
+      </div>
+      <div class="menu-item-icon" id="notif-bell" title="Notifications">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+        </svg>
+        <span class="notif-badge" id="notif-badge" style="display: none;">0</span>
+      </div>
+      <div class="menu-item-icon" id="control-center-btn" title="Control Center">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="7" width="16" height="10" rx="2" ry="2"></rect>
+          <line x1="22" y1="11" x2="22" y2="13"></line>
+          <line x1="6" y1="11" x2="10" y2="11"></line>
+          <line x1="6" y1="13" x2="14" y2="13"></line>
+        </svg>
+      </div>
+      <div class="menu-time-wrapper">
+        <span class="menu-time" id="menu-clock">12:00 PM</span>
+        <div id="calendar-dropdown" class="calendar-dropdown"></div>
+      </div>
+    </div>
+    
+    <!-- Notification Panel -->
+    <div id="notif-panel" class="notif-panel"></div>
+
+    <!-- Control Center Panel -->
+    <div id="control-center-panel" class="control-center-panel">
+      <div class="cc-grid">
+        <div class="cc-card cc-connections">
+          <div class="cc-toggle active">
+            <div class="cc-toggle-icon cc-wifi"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"></path><path d="M1.42 9a16 16 0 0 1 21.16 0"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg></div>
+            <div class="cc-toggle-info">
+              <span class="cc-toggle-name">Wi-Fi</span>
+              <span class="cc-toggle-status">Astra_Net</span>
+            </div>
+          </div>
+          <div class="cc-toggle active">
+            <div class="cc-toggle-icon cc-bt"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"></polyline></svg></div>
+            <div class="cc-toggle-info">
+              <span class="cc-toggle-name">Bluetooth</span>
+              <span class="cc-toggle-status">On</span>
+            </div>
+          </div>
+          <div class="cc-toggle">
+            <div class="cc-toggle-icon cc-airdrop"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle></svg></div>
+            <div class="cc-toggle-info">
+              <span class="cc-toggle-name">AirDrop</span>
+              <span class="cc-toggle-status">Off</span>
+            </div>
+          </div>
+        </div>
+        <div class="cc-card cc-media">
+          <div class="cc-media-info">
+            <div class="cc-media-art"></div>
+            <div class="cc-media-text">
+              <span class="cc-media-title">Gori</span>
+              <span class="cc-media-artist">Gajendra Verma</span>
+            </div>
+          </div>
+          <div class="cc-media-controls">
+            <button class="cc-media-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"></line></svg></button>
+            <button class="cc-media-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg></button>
+            <button class="cc-media-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"></line></svg></button>
+          </div>
+        </div>
+      </div>
+      <div class="cc-sliders">
+        <div class="cc-slider-row">
+          <span class="cc-slider-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+          </span>
+          <input type="range" class="cc-slider" id="brightness-slider" min="20" max="100" value="100">
+        </div>
+        <div class="cc-slider-row">
+          <span class="cc-slider-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
+          </span>
+          <input type="range" class="cc-slider" id="volume-slider" min="0" max="100" value="70">
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main OS Workspace -->
+  <main id="desktop" class="desktop">
+    <!-- Desktop Widgets Layer -->
+    <div class="desktop-widgets-layer" id="desktop-widgets-layer">
+      <div class="d-widget w-battery">
+        <svg class="w-ring" viewBox="0 0 36 36">
+          <path class="w-ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+          <path class="w-ring-fill" stroke-dasharray="53, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+        </svg>
+        <div class="w-battery-content">
+          <div class="w-battery-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+          </div>
+          <div class="w-battery-text">53%</div>
+        </div>
+      </div>
+      
+      <div class="d-widget w-weather">
+        <div class="w-weather-city">Vapi <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></div>
+        <div class="w-weather-temp">32°</div>
+        <div class="w-weather-desc">⛅ Partly Cloudy</div>
+        <div class="w-weather-hl">H:35° L:28°</div>
+      </div>
+
+      <div class="d-widget w-calendar">
+        <div class="w-cal-month">MAY</div>
+        <div class="w-cal-date">22</div>
+        <div class="w-cal-day">No Events Today</div>
+      </div>
+
+      <div class="d-widget w-clock">
+        <div id="w-clock-time">6:10</div>
+      </div>
+
+      <div class="d-widget w-events">
+        <div class="w-events-title">FRIDAY</div>
+        <div class="w-events-date">22</div>
+        <div class="w-events-desc">No Events Today</div>
+      </div>
+    </div>
+
+    <!-- Desktop Files on the Right -->
+    <div class="desktop-files-grid" id="desktop-files-grid">
+      <div class="d-file">
+        <div class="d-file-preview"><img src="https://images.unsplash.com/photo-1470770841072-f978cf4d019e?w=100&q=80" alt="Preview"></div>
+        <div class="d-file-name">Screenshot<br>2026-0...17.27 PM</div>
+      </div>
+      <div class="d-file">
+        <div class="d-file-preview"><img src="https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=100&q=80" alt="Preview"></div>
+        <div class="d-file-name">Screenshot<br>2026-0...18.48 PM</div>
+      </div>
+    </div>
+
+    <!-- Desktop Shortcut Icons -->
+    <div class="desktop-icons">
+      <div class="desktop-icon" data-app="explorer">
+        <div class="icon-wrapper glass-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+        </div>
+        <span class="icon-label">File Explorer</span>
+      </div>
+
+      <div class="desktop-icon" data-app="editor">
+        <div class="icon-wrapper glass-icon editor-icon-bg">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+        </div>
+        <span class="icon-label">Code Editor</span>
+      </div>
+
+      <div class="desktop-icon" data-app="browser">
+        <div class="icon-wrapper glass-icon browser-icon-bg">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          </svg>
+        </div>
+        <span class="icon-label">Browser</span>
+      </div>
+      
+      <div class="desktop-icon" data-app="appstore">
+        <div class="icon-wrapper glass-icon appstore-icon-bg">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+          </svg>
+        </div>
+        <span class="icon-label">App Store</span>
+      </div>
+
+      <div class="desktop-icon" data-app="settings">
+        <div class="icon-wrapper glass-icon settings-icon-bg">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </div>
+        <span class="icon-label">Settings</span>
+      </div>
+
+      <div class="desktop-icon" data-app="terminal">
+        <div class="icon-wrapper glass-icon terminal-icon-bg">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 17 10 11 4 5"></polyline>
+            <line x1="12" y1="19" x2="20" y2="19"></line>
+          </svg>
+        </div>
+        <span class="icon-label">Terminal</span>
+      </div>
+    </div>
+
+    <!-- Window Containers inside Desktop -->
+    <div id="windows-container"></div>
+  </main>
+
+  <!-- AI Co-pilot Side Panel (Astra Sidebar) -->
+  <aside id="ai-sidebar" class="ai-sidebar collapsed">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spinning-gradient">
+          <path d="M12 2L2 22h20L12 2zm0 4l6.4 12.8H5.6L12 6z"/>
+          <circle cx="12" cy="13" r="2.5"/>
+        </svg>
+        <span>Astra Co-pilot</span>
+      </div>
+      <button class="icon-button" id="toggle-sidebar-btn" title="Collapse Panel">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <div class="sidebar-body">
+      <!-- Section: Work Context -->
+      <section class="sidebar-section context-section">
+        <div class="section-title">
+          <span>Active Context</span>
+          <span class="context-dot pulsing"></span>
+        </div>
+        <div class="context-card">
+          <div class="context-item">
+            <span class="label">Project:</span>
+            <span class="value" id="context-project">Project Astra</span>
+          </div>
+          <div class="context-item">
+            <span class="label">Active App:</span>
+            <span class="value" id="context-app">Code Editor</span>
+          </div>
+          <div class="context-item">
+            <span class="label">Focus File:</span>
+            <span class="value" id="context-file">index.js</span>
+          </div>
+          <div class="context-item">
+            <span class="label">Edit cursor:</span>
+            <span class="value" id="context-cursor">Line 15, col 4</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Memory Nodes summary -->
+      <section class="sidebar-section memory-section">
+        <div class="section-title">
+          <span>Co-pilot Memory</span>
+          <button class="btn-text-action" id="open-memory-app-btn">View Graph</button>
+        </div>
+        <ul class="memory-quick-list" id="memory-quick-list">
+          <li class="memory-tag-item"><span>User prefers dark mode</span></li>
+          <li class="memory-tag-item"><span>Building API Handler for Astra</span></li>
+          <li class="memory-tag-item"><span>API Endpoint: /api/v1/agent</span></li>
+        </ul>
+      </section>
+
+      <!-- Section: Chat Assistant -->
+      <section class="sidebar-section chat-section">
+        <div class="section-title">
+          <span>Astra Co-pilot</span>
+          <button class="btn-text-action" id="sidebar-voice-toggle-btn" title="Toggle Voice Output">🔊 Voice Output</button>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-bubble assistant">
+            <div class="bubble-content">
+              Hello Divyanshu! I'm Astra, your system-level OS co-pilot. I monitor your work context, remember preferences, and can execute tasks in the background while you are away (AFK Mode). How can I help you build today?
+            </div>
+            <div class="bubble-time">Just now</div>
+          </div>
+        </div>
+
+        <div class="chat-input-area">
+          <textarea class="chat-textarea" id="chat-input-box" placeholder="Ask Astra, e.g. 'Build and test Project Astra'..." rows="1"></textarea>
+          <div class="chat-controls">
+            <button class="chat-control-btn voice-btn" id="voice-trigger-btn" title="Voice Input">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+              </svg>
+            </button>
+            <button class="chat-control-btn send-btn" id="send-chat-btn" title="Send Command">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <!-- Bottom OS Dock (Windows Taskbar/macOS Dock hybrid) -->
+  <footer id="dock-bar" class="dock-bar">
+    <div class="dock-left">
+      <button class="dock-item start-btn" id="start-menu-btn" title="Astra Start Menu (Cmd+Space)">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7"></rect>
+          <rect x="14" y="3" width="7" height="7"></rect>
+          <rect x="14" y="14" width="7" height="7"></rect>
+          <rect x="3" y="14" width="7" height="7"></rect>
+        </svg>
+      </button>
+    </div>
+    
+    <div class="dock-center">
+      <div class="dock-separator"></div>
+      
+      <button class="dock-item app-shortcut" data-app="explorer" id="dock-explorer" title="File Explorer">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="editor" id="dock-editor" title="Code Editor">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="memory" id="dock-memory" title="Memory Graph">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="18" cy="5" r="3"></circle>
+          <circle cx="6" cy="12" r="3"></circle>
+          <circle cx="18" cy="19" r="3"></circle>
+          <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+          <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="tasks" id="dock-tasks" title="Tasks Board">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="16" y1="2" x2="16" y2="6"></line>
+          <line x1="8" y1="2" x2="8" y2="6"></line>
+          <line x1="3" y1="10" x2="21" y2="10"></line>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="terminal" id="dock-terminal" title="Terminal">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="4 17 10 11 4 5"></polyline>
+          <line x1="12" y1="19" x2="20" y2="19"></line>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="browser" id="dock-browser" title="Browser">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="2" y1="12" x2="22" y2="12"></line>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+        </svg>
+        <div class="dock-badge">6</div>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="appstore" id="dock-appstore" title="App Store">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+          <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+          <line x1="12" y1="22.08" x2="12" y2="12"></line>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="settings" id="dock-settings" title="Settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="sysmonitor" id="dock-sysmonitor" title="System Monitor">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <button class="dock-item app-shortcut" data-app="dashboard" id="dock-dashboard" title="AI Dashboard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <span class="active-dot"></span>
+      </button>
+
+      <div class="dock-separator"></div>
+    </div>
+
+    <div class="dock-right">
+      <button class="afk-mode-pill" id="go-afk-btn" title="Toggle Autonomous AFK Mode">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+        <span>Go AFK</span>
+      </button>
+      <button class="dock-item sidebar-toggle-btn" id="dock-sidebar-toggle" title="Toggle Co-pilot Panel (Cmd+\)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="15" y1="3" x2="15" y2="21"></line>
+        </svg>
+      </button>
+    </div>
+  </footer>
+
+  <!-- Universal Command Palette Modal (Cmd+K) -->
+  <dialog id="command-palette-dialog" class="command-palette-dialog">
+    <div class="palette-wrapper">
+      <div class="palette-search-row">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="palette-search-input" placeholder="Type a command or ask Astra..." autocomplete="off">
+        <span class="palette-shortcut-hint">ESC</span>
+      </div>
+      <div class="palette-content">
+        <div class="palette-category">System Commands</div>
+        <ul class="palette-list" id="palette-list-system">
+          <li class="palette-option" data-command="open-explorer">
+            <span class="option-name">Open File Explorer</span>
+            <span class="option-shortcut">Alt+E</span>
+          </li>
+          <li class="palette-option" data-command="open-editor">
+            <span class="option-name">Open Code Editor</span>
+            <span class="option-shortcut">Alt+C</span>
+          </li>
+          <li class="palette-option" data-command="open-memory">
+            <span class="option-name">Open Memory Graph</span>
+            <span class="option-shortcut">Alt+M</span>
+          </li>
+          <li class="palette-option" data-command="open-tasks">
+            <span class="option-name">Open Tasks Board</span>
+            <span class="option-shortcut">Alt+T</span>
+          </li>
+          <li class="palette-option" data-command="open-terminal">
+            <span class="option-name">Open Terminal</span>
+            <span class="option-shortcut">Alt+R</span>
+          </li>
+          <li class="palette-option" data-command="go-afk">
+            <span class="option-name">Enable Autonomous AFK Mode</span>
+            <span class="option-shortcut">Alt+A</span>
+          </li>
+          <li class="palette-option" data-command="sys-reset">
+            <span class="option-name" style="color: var(--color-red)">Factory Reset Astra OS</span>
+            <span class="option-desc">Clears virtual filesystem, tasks, and memory databases</span>
+          </li>
+        </ul>
+        <div class="palette-category">AI Orchestration Commands</div>
+        <ul class="palette-list" id="palette-list-ai">
+          <li class="palette-option" data-command="ai-continue">
+            <span class="option-name">Continue active project task...</span>
+            <span class="option-desc">Auto-drafts, codes, and builds while tracking state</span>
+          </li>
+          <li class="palette-option" data-command="ai-summarize">
+            <span class="option-name">Summarize active workspace</span>
+            <span class="option-desc">Generates workspace summary in Chat</span>
+          </li>
+          <li class="palette-option" data-command="ai-organize">
+            <span class="option-name">Organize Project Directory</span>
+            <span class="option-desc">Cleans up files, links memories, and creates README</span>
+          </li>
+          <li class="palette-option" data-command="ai-clear-memory">
+            <span class="option-name">Flush Agent Memory Graph</span>
+            <span class="option-desc">Reset co-pilot persistent memories</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Safety/Approval Layer Modal -->
+  <dialog id="safety-approval-dialog" class="safety-approval-dialog">
+    <div class="safety-dialog-content">
+      <div class="safety-header">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+        <span>Security Approval Required</span>
+      </div>
+      <div class="safety-body">
+        <p class="safety-description">Astra Agent is requesting authorization to perform a sensitive operation:</p>
+        <div class="safety-details-card">
+          <div class="detail-row">
+            <span class="detail-label">Agent:</span>
+            <span class="detail-val" id="safety-agent-name">ExecutorAgent</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Operation:</span>
+            <span class="detail-val font-mono" id="safety-op-name">write_file</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Target Path:</span>
+            <span class="detail-val font-mono" id="safety-target-path">/Project_Astra/src/server.js</span>
+          </div>
+          <div class="detail-row flex-col">
+            <span class="detail-label">Proposed Action:</span>
+            <pre class="detail-code font-mono" id="safety-code-preview">Overwrite active server logic with new websocket connection code.</pre>
+          </div>
+        </div>
+      </div>
+      <div class="safety-footer">
+        <button class="btn btn-secondary" id="safety-deny-btn">Deny Action</button>
+        <button class="btn btn-primary" id="safety-approve-btn">Approve & Execute</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Notification Dispatcher Portal -->
+  <div id="toast-portal" class="toast-portal"></div>
+
+  <!-- AFK Autonomous Screensaver Overlay -->
+  <div id="afk-overlay" class="afk-overlay hidden">
+    <!-- Floating particle system -->
+    <div class="afk-particles" id="afk-particles"></div>
+    
+    <div class="afk-content">
+      <div class="afk-clock-section">
+        <h1 class="afk-time" id="afk-clock">12:00 PM</h1>
+        <p class="afk-date" id="afk-date">Friday, May 22, 2026</p>
+      </div>
+      
+      <div class="afk-agent-card">
+        <div class="afk-agent-status">
+          <svg class="afk-spinner" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="url(#spinner-gradient)" stroke-width="2">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.2"/>
+            <path d="M12 2a10 10 0 0 1 10 10"/>
+            <defs>
+              <linearGradient id="spinner-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#a855f7"/>
+                <stop offset="100%" stop-color="#3b82f6"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div class="afk-status-text">
+            <h2>Astra is Working</h2>
+            <p id="afk-agent-phase">Planner formulating sub-steps...</p>
+          </div>
+        </div>
+        
+        <div class="afk-logs-container">
+          <div class="afk-logs-header">Autonomous Agent Activity Log</div>
+          <div class="afk-logs-list" id="afk-logs-list">
+            <div class="log-row info">AFK Autonomous Mode Enabled. Bounded actions authorized.</div>
+          </div>
+        </div>
+
+        <div class="afk-task-progress">
+          <div class="progress-info">
+            <span id="afk-task-name">Completing Project Astra documentation</span>
+            <span id="afk-task-percent">35%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="afk-progress-fill" style="width: 35%"></div>
+          </div>
+        </div>
+
+        <button class="afk-wake-btn" id="wake-up-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+            <line x1="12" y1="2" x2="12" y2="12"></line>
+          </svg>
+          Wake Up & Resume Workspace
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AFK Summary / Report Dialog (Appears after waking up) -->
+  <dialog id="afk-summary-dialog" class="afk-summary-dialog">
+    <div class="summary-dialog-content">
+      <div class="summary-header">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" class="spinning-gradient">
+          <path d="M12 2L2 22h20L12 2z"/>
+        </svg>
+        <span>While You Were Away — Astra Summary</span>
+      </div>
+      
+      <div class="summary-body">
+        <p class="summary-intro">Astra executed autonomous tasks for <strong><span id="afk-duration-display">3 mins</span></strong>. Here is the work completed:</p>
+        
+        <div class="summary-stats-grid">
+          <div class="stat-card">
+            <span class="stat-num" id="summary-tasks-completed">3</span>
+            <span class="stat-label">Tasks Completed</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-num" id="summary-files-modified">2</span>
+            <span class="stat-label">Files Modified</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-num" id="summary-memories-created">5</span>
+            <span class="stat-label">Memories Recorded</span>
+          </div>
+        </div>
+
+        <div class="summary-tabs">
+          <button class="summary-tab active" data-tab="actions">Completed Actions</button>
+          <button class="summary-tab" data-tab="changes">File Diffs</button>
+        </div>
+
+        <div class="summary-tab-content active" id="tab-actions">
+          <ul class="summary-action-list" id="summary-action-list">
+            <!-- Simulated rows -->
+          </ul>
+        </div>
+
+        <div class="summary-tab-content" id="tab-changes">
+          <div class="summary-diff-container" id="summary-diff-container">
+            <!-- Diff viewer -->
+          </div>
+        </div>
+      </div>
+      
+      <div class="summary-footer">
+        <button class="btn btn-primary" id="close-summary-btn">Acknowledge & Resume Work</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Script Modules -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

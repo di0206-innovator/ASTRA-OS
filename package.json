@@ -1,0 +1,12 @@
+{
+  "name": "astra-os",
+  "version": "1.0.0",
+  "description": "Astra OS — AI-First Desktop Experience",
+  "main": "index.html",
+  "scripts": {
+    "dev": "python3 -m http.server 8080"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
