@@ -658,9 +658,12 @@ window.AstraApps.trust = function(container, ui) {
       confidenceThreshold: 85
     };
     
-    const safetyLevel = "100% SECURE";
-    const systemRisk = "LOW";
-    const safetyAgentVerdict = "Astra is operating within authorized security boundaries.";
+    const safeModeActive = state.registry.security?.safeMode === true;
+    const safetyLevel = safeModeActive ? "🛡️ SAFE MODE ENABLED" : "100% SECURE";
+    const systemRisk = safeModeActive ? "MINIMAL" : "LOW";
+    const safetyAgentVerdict = safeModeActive
+      ? "Safe Mode active: All agent VFS writes and process spawning are blocked."
+      : "Astra is operating within authorized security boundaries.";
     
     const pendingCount = state.approvalsQueue ? state.approvalsQueue.length : 0;
     
@@ -703,11 +706,18 @@ window.AstraApps.trust = function(container, ui) {
                 <option value="deny" ${safety.settingsPolicy === 'deny' ? 'selected' : ''}>Block All Changes</option>
               </select>
             </div>
+            <div class="trust-policy-row" style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; margin-top: 4px;">
+              <span class="trust-policy-label" style="font-weight: bold; color: var(--color-amber);">System Safe Mode</span>
+              <select class="trust-policy-select" id="policy-safemode" style="border-color: var(--color-amber); color: var(--color-amber); font-weight: 500;">
+                <option value="false" ${!safeModeActive ? 'selected' : ''}>Disabled (Normal)</option>
+                <option value="true" ${safeModeActive ? 'selected' : ''}>Enabled (Blocks Agent Writes)</option>
+              </select>
+            </div>
           </div>
 
           <div class="trust-panel">
             <h4>Safety Agent Context</h4>
-            <p style="font-size: 13px; margin: 2px 0;">Risk Level Assessment: <strong style="color: var(--color-green);">${systemRisk}</strong></p>
+            <p style="font-size: 13px; margin: 2px 0;">Risk Level Assessment: <strong style="color: ${safeModeActive ? 'var(--color-primary)' : 'var(--color-green)'};">${systemRisk}</strong></p>
             
             <div class="trust-slider-container">
               <div class="trust-slider-label">
@@ -722,6 +732,49 @@ window.AstraApps.trust = function(container, ui) {
               <br>
               Confidence score below <strong>${safety.confidenceThreshold}%</strong> forces uncertainty escalation and prompts the user for approval.
             </p>
+          </div>
+        </div>
+      `;
+    } else if (activeTab === 'manifests') {
+      const manifests = state.registry.appManifests || {};
+      let manifestsHTML = '';
+      Object.entries(manifests).forEach(([appName, manifest]) => {
+        const perms = manifest.permissions || [];
+        const sandbox = manifest.sandbox || [];
+        const isAgent = appName.toLowerCase().includes('agent') || appName === 'AstraAgent';
+        const badgeColor = isAgent ? 'var(--color-amber)' : 'var(--color-primary)';
+        
+        manifestsHTML += `
+          <div class="trust-panel" style="margin-bottom: 12px; gap: 8px; background: var(--bg-glass-light); border: 1px solid var(--border-glass);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 6px; margin-bottom: 4px;">
+              <span style="font-weight: 600; font-size: 13px; color: ${badgeColor}; font-family: var(--font-mono);">${window.escapeHTML(appName)}</span>
+              <span style="font-size: 9px; padding: 2px 6px; border-radius: 10px; background: ${isAgent ? 'rgba(245,158,11,0.1)' : 'rgba(168,85,247,0.1)'}; color: ${badgeColor}; border: 1px solid ${isAgent ? 'rgba(245,158,11,0.2)' : 'rgba(168,85,247,0.2)'}; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">${isAgent ? 'Agent' : 'System App'}</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <div>
+                <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Permissions:</span>
+                <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">
+                  ${perms.length === 0 ? '<span style="color: var(--text-muted); font-size: 11px; font-style: italic;">None</span>' : perms.map(p => `<span style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 1px 5px; font-family: var(--font-mono); font-size: 10px; color: var(--text-primary);">${window.escapeHTML(p)}</span>`).join('')}
+                </div>
+              </div>
+              <div>
+                <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">VFS Sandbox Paths:</span>
+                <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">
+                  ${sandbox.length === 0 ? '<span style="color: var(--text-muted); font-size: 11px; font-style: italic;">None</span>' : sandbox.map(s => `<span style="background: rgba(6,182,212,0.04); border: 1px solid rgba(6,182,212,0.15); border-radius: 4px; padding: 1px 5px; font-family: var(--font-mono); font-size: 10px; color: #67e8f9;">${window.escapeHTML(s)}</span>`).join('')}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      activeTabContent = `
+        <div class="trust-panel" style="flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; gap: 10px;">
+          <h4>Application & Agent Security Manifests</h4>
+          <p style="font-size: 11.5px; color: var(--text-secondary); margin: 0; line-height: 1.4;">
+            Every utility and autonomous agent declared in the registry runs under a manifest-based security policy, constraining its allowed syscall interfaces and sandboxed virtual filesystem scopes.
+          </p>
+          <div style="flex-grow: 1; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 8px;">
+            ${manifestsHTML}
           </div>
         </div>
       `;
@@ -878,6 +931,7 @@ window.AstraApps.trust = function(container, ui) {
 
         <div class="trust-tabs" style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border-glass); padding-bottom: 8px;">
           <button class="btn trust-tab ${activeTab === 'policies' ? 'active' : ''}" data-tab="policies" style="background: ${activeTab === 'policies' ? 'var(--bg-glass-light)' : 'transparent'}; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 12px; border-radius: 4px; font-size: 12px;">Autonomy Policies</button>
+          <button class="btn trust-tab ${activeTab === 'manifests' ? 'active' : ''}" data-tab="manifests" style="background: ${activeTab === 'manifests' ? 'var(--bg-glass-light)' : 'transparent'}; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 12px; border-radius: 4px; font-size: 12px;">App Permissions</button>
           <button class="btn trust-tab ${activeTab === 'approvals' ? 'active' : ''}" data-tab="approvals" style="background: ${activeTab === 'approvals' ? 'var(--bg-glass-light)' : 'transparent'}; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 12px; border-radius: 4px; font-size: 12px;">
             Approvals Inbox <span id="trust-pending-badge" style="background: var(--color-amber); color: #000; font-size: 10px; font-weight: bold; border-radius: 10px; padding: 1px 6px; margin-left: 4px; display: ${pendingCount > 0 ? 'inline-block' : 'none'};">${pendingCount}</span>
           </button>
@@ -903,6 +957,15 @@ window.AstraApps.trust = function(container, ui) {
     if (activeTab === 'policies') {
       container.querySelectorAll('.trust-policy-select').forEach(select => {
         select.addEventListener('change', () => {
+          if (select.id === 'policy-safemode') {
+            const isSafe = select.value === 'true';
+            if (!state.registry.security) state.registry.security = {};
+            state.registry.security.safeMode = isSafe;
+            state.saveState();
+            ui.showToast('Safe Mode Updated', `Safe Mode is now ${isSafe ? 'ENABLED' : 'DISABLED'}.`, isSafe ? 'warning' : 'success');
+            render();
+            return;
+          }
           const policyKey = select.id.replace('policy-', '') + 'Policy';
           if (!state.registry.safety) state.registry.safety = {};
           state.registry.safety[policyKey] = select.value;

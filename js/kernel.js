@@ -93,7 +93,7 @@ export class Kernel {
       }
       case 'fs:delete': {
         const [path] = args;
-        return this.state.deleteFile(path);
+        return this.moveToTrash(path);
       }
       case 'fs:mkdir': {
         const [path] = args;

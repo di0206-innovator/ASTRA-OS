@@ -82,40 +82,45 @@ window.html = function(strings, ...values) {
   }, '');
 };
 
-/**
- * PolicyEngine evaluates permission validation requests centrally.
- */
 window.PolicyEngine = class PolicyEngine {
   constructor(state) {
     this.state = state;
   }
 
-  /**
-   * Validates if a caller is authorized to perform a syscall.
-   * @param {string} callerId - The identifier of the calling app/process/agent.
-   * @param {string} callName - The syscall identifier (e.g. 'fs:read', 'proc:spawn').
-   * @param {any[]} args - The arguments passed to the syscall.
-   * @returns {boolean} - True if allowed, false otherwise.
-   */
+  isPathInSandbox(targetPath, sandboxPaths) {
+    if (!sandboxPaths) return false;
+    if (sandboxPaths.includes('/')) return true;
+    
+    // Normalize path by removing duplicate slashes and trailing slashes
+    const cleanPath = targetPath.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+    
+    return sandboxPaths.some(sb => {
+      const cleanSb = sb.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+      if (cleanSb === '/') return true;
+      if (cleanPath === cleanSb) return true;
+      return cleanPath.startsWith(cleanSb + '/');
+    });
+  }
+
   checkPermission(callerId, callName, args) {
     // If permissions are globally disabled in the registry, bypass check
     if (this.state.registry?.security?.enforcePermissions === false) return true;
 
     // Standard application and agent manifests
     const manifests = this.state.registry?.appManifests || {
-      'explorer': ['fs:read', 'fs:write'],
-      'editor': ['fs:read', 'fs:write'],
-      'terminal': ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'],
-      'settings': ['settings:read', 'settings:write', 'fs:read', 'fs:write'],
-      'dashboard': ['fs:read'],
-      'workflow': ['fs:read'],
-      'memory': ['fs:read'],
-      'sysmonitor': ['proc:spawn', 'proc:kill'],
-      'AstraAgent': ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'],
-      'ExecutorAgent': ['fs:read', 'fs:write'],
-      'WatcherAgent': ['fs:read', 'proc:spawn'],
-      'PlannerAgent': ['fs:read'],
-      'MemoryAgent': ['fs:read', 'fs:write']
+      'explorer': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+      'editor': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+      'terminal': { permissions: ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'], sandbox: ['/'] },
+      'settings': { permissions: ['settings:read', 'settings:write', 'fs:read', 'fs:write'], sandbox: ['/'] },
+      'dashboard': { permissions: ['fs:read'], sandbox: ['/'] },
+      'workflow': { permissions: ['fs:read'], sandbox: ['/'] },
+      'memory': { permissions: ['fs:read'], sandbox: ['/'] },
+      'sysmonitor': { permissions: ['proc:spawn', 'proc:kill'], sandbox: ['/'] },
+      'AstraAgent': { permissions: ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+      'ExecutorAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
+      'WatcherAgent': { permissions: ['fs:read', 'proc:spawn'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
+      'PlannerAgent': { permissions: ['fs:read'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
+      'MemoryAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] }
     };
 
     let baseCaller = callerId;
@@ -123,7 +128,9 @@ window.PolicyEngine = class PolicyEngine {
       baseCaller = 'terminal';
     }
 
-    const allowed = manifests[baseCaller] || [];
+    const manifest = manifests[baseCaller] || { permissions: [], sandbox: ['/'] };
+    const allowed = manifest.permissions || [];
+    const sandboxDirs = manifest.sandbox || ['/'];
 
     let requiredPermission = '';
     if (callName.startsWith('fs:')) {
@@ -144,11 +151,19 @@ window.PolicyEngine = class PolicyEngine {
       return false;
     }
 
-    // Directory Write Scope Verification
+    // Enforce VFS Sandbox Storage Scopes
+    if (callName.startsWith('fs:') && args && args[0]) {
+      const targetPath = args[0];
+      if (!this.isPathInSandbox(targetPath, sandboxDirs)) {
+        console.warn(`[PolicyEngine] Access Denied: Caller "${callerId}" attempted to access path "${targetPath}" which is outside its sandbox scope: [${sandboxDirs.join(', ')}]`);
+        return false;
+      }
+    }
+
+    // Directory Write Scope Verification (Sensitive system folders)
     if (callName.startsWith('fs:') && requiredPermission === 'fs:write' && args && args[0]) {
       const targetPath = args[0];
       
-      // Restrict modifying sensitive system folders unless admin or privileged settings/terminal
       const isSystemPath = targetPath.startsWith('/bin') || targetPath.startsWith('/sbin') || targetPath.startsWith('/etc') || targetPath.startsWith('/var');
       if (isSystemPath) {
         const isAdmin = this.state.currentSession?.role === 'admin';
@@ -159,9 +174,17 @@ window.PolicyEngine = class PolicyEngine {
       }
     }
 
-    // Evaluate Autonomy Safety Policies for autonomous agents
+    // Evaluate Autonomy Safety Policies & Safe Mode for autonomous agents
     const isAgent = typeof callerId === 'string' && (callerId.toLowerCase().includes('agent') || callerId === 'AstraAgent');
     if (isAgent) {
+      // Safe Mode Block
+      if (this.state.registry?.security?.safeMode === true) {
+        if (requiredPermission === 'fs:write' || callName.startsWith('proc:')) {
+          console.warn(`[PolicyEngine] Access Denied: Caller "${callerId}" write/spawn blocked by active Safe Mode.`);
+          return false;
+        }
+      }
+
       const safety = this.state.registry.safety || {
         writePolicy: 'ask',
         commandPolicy: 'ask',

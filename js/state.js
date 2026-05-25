@@ -431,7 +431,23 @@ export class OSState {
       security: {
         autoLockTimeout: 300,
         requirePasswordOnWake: true,
-        enforcePermissions: true
+        enforcePermissions: true,
+        safeMode: false
+      },
+      appManifests: {
+        'explorer': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+        'editor': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+        'terminal': { permissions: ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'], sandbox: ['/'] },
+        'settings': { permissions: ['settings:read', 'settings:write', 'fs:read', 'fs:write'], sandbox: ['/'] },
+        'dashboard': { permissions: ['fs:read'], sandbox: ['/'] },
+        'workflow': { permissions: ['fs:read'], sandbox: ['/'] },
+        'memory': { permissions: ['fs:read'], sandbox: ['/'] },
+        'sysmonitor': { permissions: ['proc:spawn', 'proc:kill'], sandbox: ['/'] },
+        'AstraAgent': { permissions: ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+        'ExecutorAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'WatcherAgent': { permissions: ['fs:read', 'proc:spawn'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'PlannerAgent': { permissions: ['fs:read'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'MemoryAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] }
       },
       safety: {
         writePolicy: 'ask',
