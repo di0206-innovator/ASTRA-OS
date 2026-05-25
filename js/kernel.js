@@ -9,12 +9,19 @@ export class Kernel {
     this.jobs = [];
     this.nextJobId = 1;
     this.bootDaemons();
+    this.policyEngine = new window.PolicyEngine(state);
     window.Astra = {
-      syscall: (callName, ...args) => this.syscall(callName, args)
+      syscall: (callName, ...args) => {
+        const callerId = window.AstraRuntime ? window.AstraRuntime.getActiveCallerId() : 'unknown';
+        return this.syscall(callerId, callName, args);
+      }
     };
   }
 
-  syscall(callName, args) {
+  syscall(callerId, callName, args) {
+    if (this.policyEngine && !this.policyEngine.checkPermission(callerId, callName, args)) {
+      throw new Error(`Permission Denied: Caller "${callerId}" lacks permission for syscall "${callName}"`);
+    }
     switch (callName) {
       case 'fs:read': {
         const [path, offset, limit] = args;
@@ -22,7 +29,7 @@ export class Kernel {
         if (this.state.isLocked(path, 'read', currentOwner)) {
           throw new Error(`Permission Denied: File locked exclusively by another process`);
         }
-        const fileNode = this.state.resolvePath(path);
+        const fileNode = this.state.resolvePath(path, currentOwner);
         if (!fileNode) {
           throw new Error(`File not found: ${path}`);
         }
@@ -44,7 +51,7 @@ export class Kernel {
           throw new Error(`Permission Denied: File path is locked`);
         }
         if (append) {
-          const fileNode = this.state.resolvePath(path);
+          const fileNode = this.state.resolvePath(path, currentOwner);
           const existing = fileNode ? (fileNode.content || '') : '';
           return this.state.writeFile(path, existing + content);
         } else {
@@ -2148,7 +2155,7 @@ export class Kernel {
                   writeRow(`[node PID ${proc.pid}] ${text}`, cls);
                 } else if (type === 'syscall') {
                   try {
-                    const result = this.syscall(callName, syscallArgs);
+                    const result = this.syscall(`node:${fileName}`, callName, syscallArgs);
                     worker.postMessage({ type: 'syscall_response', id, result });
                   } catch (e) {
                     worker.postMessage({ type: 'syscall_response', id, error: e.message });
@@ -2395,7 +2402,7 @@ export class Kernel {
                       writeRow('[PID ' + proc.pid + '] ' + text, cls);
                     } else if (type === 'syscall') {
                       try {
-                        const result = this.syscall(callName, syscallArgs);
+                        const result = this.syscall('exec:' + fName, callName, syscallArgs);
                         worker.postMessage({ type: 'syscall_response', id, result });
                       } catch (e) {
                         worker.postMessage({ type: 'syscall_response', id, error: e.message });

@@ -81,3 +81,85 @@ window.html = function(strings, ...values) {
     return acc + str + encoded;
   }, '');
 };
+
+/**
+ * PolicyEngine evaluates permission validation requests centrally.
+ */
+window.PolicyEngine = class PolicyEngine {
+  constructor(state) {
+    this.state = state;
+  }
+
+  /**
+   * Validates if a caller is authorized to perform a syscall.
+   * @param {string} callerId - The identifier of the calling app/process/agent.
+   * @param {string} callName - The syscall identifier (e.g. 'fs:read', 'proc:spawn').
+   * @param {any[]} args - The arguments passed to the syscall.
+   * @returns {boolean} - True if allowed, false otherwise.
+   */
+  checkPermission(callerId, callName, args) {
+    // If permissions are globally disabled in the registry, bypass check
+    if (this.state.registry?.security?.enforcePermissions === false) return true;
+
+    // Standard application and agent manifests
+    const manifests = this.state.registry?.appManifests || {
+      'explorer': ['fs:read', 'fs:write'],
+      'editor': ['fs:read', 'fs:write'],
+      'terminal': ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'],
+      'settings': ['settings:read', 'settings:write', 'fs:read', 'fs:write'],
+      'dashboard': ['fs:read'],
+      'workflow': ['fs:read'],
+      'memory': ['fs:read'],
+      'sysmonitor': ['proc:spawn', 'proc:kill'],
+      'AstraAgent': ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'],
+      'ExecutorAgent': ['fs:read', 'fs:write'],
+      'WatcherAgent': ['fs:read', 'proc:spawn'],
+      'PlannerAgent': ['fs:read'],
+      'MemoryAgent': ['fs:read', 'fs:write']
+    };
+
+    let baseCaller = callerId;
+    if (typeof callerId === 'string' && callerId.startsWith('node:')) {
+      baseCaller = 'terminal';
+    }
+
+    const allowed = manifests[baseCaller] || [];
+
+    let requiredPermission = '';
+    if (callName.startsWith('fs:')) {
+      if (callName === 'fs:read' || callName === 'fs:lock' || callName === 'fs:unlock') {
+        requiredPermission = 'fs:read';
+      } else {
+        requiredPermission = 'fs:write';
+      }
+    } else if (callName.startsWith('proc:')) {
+      requiredPermission = callName;
+    }
+
+    if (!requiredPermission) return true;
+
+    const hasPerm = allowed.includes(requiredPermission);
+    if (!hasPerm) {
+      console.warn(`[PolicyEngine] Access Denied: Caller "${callerId}" lacks "${requiredPermission}" permission for syscall "${callName}".`);
+      return false;
+    }
+
+    // Directory Write Scope Verification
+    if (callName.startsWith('fs:') && requiredPermission === 'fs:write' && args && args[0]) {
+      const targetPath = args[0];
+      
+      // Restrict modifying sensitive system folders unless admin or privileged settings/terminal
+      const isSystemPath = targetPath.startsWith('/bin') || targetPath.startsWith('/sbin') || targetPath.startsWith('/etc') || targetPath.startsWith('/var');
+      if (isSystemPath) {
+        const isAdmin = this.state.currentSession?.role === 'admin';
+        if (baseCaller !== 'settings' && baseCaller !== 'terminal' && !isAdmin) {
+          console.warn(`[PolicyEngine] Access Denied: Caller "${callerId}" cannot write to system path "${targetPath}".`);
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+};
+

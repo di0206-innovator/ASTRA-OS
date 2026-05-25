@@ -68,29 +68,30 @@ export class AppRuntime {
     return allowed.includes(permission);
   }
 
-  getContext(appId) {
-    const enforce = (perm, cb) => {
-      if (!this.checkPermission(appId, perm)) {
-        throw new Error(`Permission Denied: App "${appId}" does not have "${perm}" permission.`);
-      }
-      return cb();
-    };
+  getActiveCallerId() {
+    // Identify the active caller based on the focused UI window
+    if (this.ui && this.ui.state && this.ui.state.activeWindow) {
+      return this.ui.state.activeWindow;
+    }
+    // If the agent orchestrator is executing an active workflow, attribute to it
+    if (window.AstraAgentOrchestrator && window.AstraAgentOrchestrator.activeWorkflow) {
+      return window.AstraAgentOrchestrator.currentAgentId || 'AstraAgent';
+    }
+    return 'user';
+  }
 
+  getContext(appId) {
     return {
       appId,
-      state: this.state,
-      kernel: this.kernel,
-      ui: this.ui,
-      bus: this.bus,
       fs: {
-        read: (path) => enforce('fs:read', () => this.kernel.syscall('fs:read', path)),
-        write: (path, content, append = false) => enforce('fs:write', () => this.kernel.syscall('fs:write', path, content, append)),
-        lock: (path, type = 'shared') => enforce('fs:read', () => this.kernel.syscall('fs:lock', path, type)),
-        unlock: (path) => enforce('fs:read', () => this.kernel.syscall('fs:unlock', path))
+        read: (path) => this.kernel.syscall(appId, 'fs:read', [path]),
+        write: (path, content, append = false) => this.kernel.syscall(appId, 'fs:write', [path, content, append]),
+        lock: (path, type = 'shared') => this.kernel.syscall(appId, 'fs:lock', [path, type]),
+        unlock: (path) => this.kernel.syscall(appId, 'fs:unlock', [path])
       },
       process: {
-        spawn: (name, parentPid) => enforce('proc:spawn', () => this.kernel.syscall('proc:spawn', name, parentPid)),
-        kill: (pid) => enforce('proc:kill', () => this.kernel.syscall('proc:kill', pid))
+        spawn: (name, parentPid) => this.kernel.syscall(appId, 'proc:spawn', [name, parentPid]),
+        kill: (pid) => this.kernel.syscall(appId, 'proc:kill', [pid])
       },
       emit: (eventName, payload) => this.bus.emit(eventName, { appId, ...payload }),
       

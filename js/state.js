@@ -815,13 +815,28 @@ export class OSState {
   // ==========================================
   // Virtual Filesystem Accessors
   // ==========================================
-  resolvePath(pathStr) {
+  resolvePath(pathStr, user = null) {
     if (!pathStr || pathStr === '/' || pathStr === 'root') return this.fs['root'];
     const parts = pathStr.replace(/^\//, '').split('/').filter(Boolean);
     let current = this.fs['root'];
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    
     for (const part of parts) {
       const safePart = window.sanitizeKey(part);
       if (!current || current.type !== 'dir' || !safePart) return null;
+      
+      // Enforce directory traversal checks
+      if (this.registry?.security?.enforcePermissions) {
+        const isOwner = (current.owner || 'divyanshu') === currentUser;
+        const perms = current.permissions || 'rwxr-xr-x';
+        const canTraverse = isOwner ? perms[2] === 'x' : (perms[5] === 'x' || perms[8] === 'x');
+        const isAdmin = this.currentSession?.role === 'admin';
+        if (!canTraverse && !isAdmin) {
+          console.warn(`[VFS] Traversal Denied: No execute permission on directory "${current.name || '/'}" for user "${currentUser}".`);
+          return null;
+        }
+      }
+      
       current = current.children[safePart];
     }
     return this.touchNode(current);

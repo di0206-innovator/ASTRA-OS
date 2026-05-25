@@ -1,4 +1,10 @@
 const puppeteer = require('puppeteer');
+const fs = require('fs');
+const path = require('path');
+const ARTIFACTS_DIR = process.env.ARTIFACTS_DIR || '/Users/divyanshusinha/.gemini/antigravity-ide/brain/4cc533f9-5d58-4dec-9dc1-a131d096d858';
+if (!fs.existsSync(ARTIFACTS_DIR)) {
+  fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+}
 
 (async () => {
   const browser = await puppeteer.launch({ headless: 'new' });
@@ -24,7 +30,7 @@ const puppeteer = require('puppeteer');
   await new Promise(r => setTimeout(r, 1000));
 
   // Screenshot before install
-  await page.screenshot({ path: '/Users/divyanshusinha/.gemini/antigravity-ide/brain/dc6fe00c-ce99-4995-94e0-a070899a72d3/appstore_open.png' });
+  await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'appstore_open.png') });
 
   console.log("Installing Astro Defender (astroid)...");
   // Find the button with data-pkg="astroid" inside the app store and click it via DOM
@@ -51,7 +57,7 @@ const puppeteer = require('puppeteer');
 
   // Screenshot of the game running
   console.log("Taking screenshot of Astro Defender gameplay...");
-  await page.screenshot({ path: '/Users/divyanshusinha/.gemini/antigravity-ide/brain/dc6fe00c-ce99-4995-94e0-a070899a72d3/astroid_gameplay.png' });
+  await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'astroid_gameplay.png') });
 
   console.log("Closing Astro Defender game window...");
   await page.click('.window[data-app="astroid"] .dot-close');
@@ -92,7 +98,7 @@ const puppeteer = require('puppeteer');
 
   // Screenshot of PulseWave player running
   console.log("Taking screenshot of PulseWave Synth player...");
-  await page.screenshot({ path: '/Users/divyanshusinha/.gemini/antigravity-ide/brain/dc6fe00c-ce99-4995-94e0-a070899a72d3/pulsewave_active.png' });
+  await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'pulsewave_active.png') });
 
   await browser.close();
   console.log("Interactive test completed.");

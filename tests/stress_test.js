@@ -2,7 +2,10 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 
-const ARTIFACTS_DIR = '/Users/divyanshusinha/.gemini/antigravity-ide/brain/f5e16280-9462-43b9-be52-ae9844560e7f';
+const ARTIFACTS_DIR = process.env.ARTIFACTS_DIR || '/Users/divyanshusinha/.gemini/antigravity-ide/brain/4cc533f9-5d58-4dec-9dc1-a131d096d858';
+if (!fs.existsSync(ARTIFACTS_DIR)) {
+  fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+}
 
 (async () => {
   console.log("Starting OS Stress Test and Functional Verification...");

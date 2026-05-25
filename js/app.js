@@ -20,6 +20,7 @@ function bootOS() {
   const ui = new UIController(state);
   ui.init();
   const orchestrator = new AgentOrchestrator(state, ui);
+  window.AstraAgentOrchestrator = orchestrator;
   const runtime = new AppRuntime({ state, kernel: window.AstraKernel, ui, bus });
   window.AstraBus = bus;
   window.AstraRuntime = runtime;

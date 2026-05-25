@@ -152,12 +152,21 @@ export class AgentOrchestrator {
 
         this.logAgent('PlannerAgent', 'Created orchestration checklist. Assigned tasks to specialized agents.');
         
-        this.state.agentTasks = [
-          { id: 'task-1', title: 'Parse active workspace context', desc: 'Read README.md and index.js variables', status: 'completed', assigned: 'PlannerAgent' },
-          { id: 'task-2', title: 'Implement Express API endpoints', desc: 'Inject routing and council endpoints inside index.js', status: 'pending', assigned: 'ExecutorAgent' },
-          { id: 'task-3', title: 'Compile and build index.js', desc: 'Run verify test suite compiler', status: 'pending', assigned: 'WatcherAgent' },
-          { id: 'task-4', title: 'Link endpoints in README', desc: 'Document gateway routes in README.md', status: 'pending', assigned: 'MemoryAgent' }
-        ];
+        const lowerGoal = workflow.goal.toLowerCase();
+        if (lowerGoal.includes('build') || lowerGoal.includes('implement') || lowerGoal.includes('route') || lowerGoal.includes('astra')) {
+          this.state.agentTasks = [
+            { id: 'task-1', title: 'Parse active workspace context', desc: 'Read README.md and index.js variables', status: 'pending', assigned: 'PlannerAgent', action: 'fs:read', path: '/Project_Astra/README.md' },
+            { id: 'task-2', title: 'Implement Express API endpoints', desc: 'Inject routing and council endpoints inside index.js', status: 'pending', assigned: 'ExecutorAgent', action: 'fs:write', path: '/Project_Astra/index.js' },
+            { id: 'task-3', title: 'Compile and build index.js', desc: 'Run verify test suite compiler', status: 'pending', assigned: 'WatcherAgent', action: 'npm run build' },
+            { id: 'task-4', title: 'Link endpoints in README', desc: 'Document gateway routes in README.md', status: 'pending', assigned: 'MemoryAgent', action: 'fs:write', path: '/Project_Astra/README.md' }
+          ];
+        } else {
+          this.state.agentTasks = [
+            { id: 'task-1', title: 'Audit current filesystem structure', desc: 'Scan files inside active workspace root', status: 'pending', assigned: 'PlannerAgent', action: 'fs:read', path: '/Project_Astra/README.md' },
+            { id: 'task-2', title: 'Verify settings and configuration', desc: 'Analyze system environment and keys settings', status: 'pending', assigned: 'ExecutorAgent', action: 'fs:read', path: '/Project_Astra/index.js' },
+            { id: 'task-3', title: 'Run integrity and verification suite', desc: 'Confirm no path resolution locks or corruption', status: 'pending', assigned: 'WatcherAgent', action: 'npm run build' }
+          ];
+        }
         
         this.state.appendWorkflowStep(workflow.id, {
           title: 'Draft execution plan',
@@ -167,248 +176,224 @@ export class AgentOrchestrator {
         });
         this.state.saveState();
         if (window.refreshTasksBoard) window.refreshTasksBoard();
-        this.ui.showToast('Plan Drafted', 'PlannerAgent created 4 tasks.', 'info');
+        this.ui.showToast('Plan Drafted', `PlannerAgent created ${this.state.agentTasks.length} tasks.`, 'info');
         await this.delay(2000);
       }
 
-      if (startStepIndex <= 1) {
-        this.logAgent('ExecutorAgent', 'Opening Code Editor to file /Project_Astra/index.js');
-        this.ui.openApp('editor');
-        if (window.editorOpenFile) {
-          window.editorOpenFile('/Project_Astra/index.js');
-        }
+      let stepIndex = startStepIndex > 0 ? startStepIndex - 1 : 0;
+      
+      while (stepIndex < this.state.agentTasks.length) {
+        const task = this.state.agentTasks[stepIndex];
+        this.currentAgentId = task.assigned;
         
-        this.state.appendWorkflowStep(workflow.id, {
-          title: 'Open editor index.js',
-          assigned: 'ExecutorAgent',
-          status: 'completed',
-          confidence: 95
-        });
-        await this.delay(2000);
-      }
+        this.logAgent(task.assigned, `Running task: ${task.title}`);
+        this.state.updateTaskStatus(task.id, 'progress');
+        if (window.refreshTasksBoard) window.refreshTasksBoard();
+        
+        await this.delay(1500);
 
-      if (startStepIndex <= 2) {
-        this.logAgent('SafetyLayer', 'Intercepted file modification task: [Implement Express API endpoints]. Checking bounds...');
-        await this.delay(1200);
-
-        const approved = await this.checkSafetyPolicy(
-          'edit_file',
-          '/Project_Astra/index.js',
-          `Inject new routing endpoints for Astra Agent Council inside index.js.`
-        );
-
-        if (!approved) {
-          this.logAgent('SafetyLayer', 'Permission denied by user. Halting execution loop.', 'alert');
-          this.state.updateWorkflow(workflow.id, { status: 'blocked' });
-          this.ui.showToast('Orchestration Halted', 'Safety layer denied modification permissions.', 'error');
-          this.state.appendWorkflowStep(workflow.id, {
-            title: 'Verify safety policies',
-            assigned: 'SafetyLayer',
-            status: 'failed',
-            error: 'PERMISSION_DENIED',
-            confidence: 30
-          });
-          this.setAgentIdle();
-          this.activeWorkflow = false;
-          return;
-        }
-
-        this.logAgent('SafetyLayer', 'Permission approved. Resuming execution task.', 'success');
-        await this.delay(1000);
-
-        this.logAgent('ExecutorAgent', 'Writing code inside index.js');
-        const textarea = document.getElementById('editor-text-area') || document.getElementById('editor-content');
-        if (textarea) {
-          this.state.updateTaskStatus('task-2', 'progress');
-          if (window.refreshTasksBoard) window.refreshTasksBoard();
+        if (task.action === 'fs:read') {
+          this.logAgent(task.assigned, `Reading content of ${task.path}`);
+          const fileNode = this.state.resolvePath(task.path);
+          const content = fileNode ? fileNode.content : '';
           
-          const originalCode = textarea.value;
-          const injectionTarget = `// TODO: Implement the express endpoints for agent council communication`;
-          const codeToInject = `// Implement the express endpoints for agent council communication
+          this.state.appendWorkflowStep(workflow.id, {
+            title: `Read ${task.path.split('/').pop()}`,
+            assigned: task.assigned,
+            status: 'completed',
+            confidence: 95
+          });
+          this.state.updateTaskStatus(task.id, 'completed');
+          
+        } else if (task.action === 'fs:write') {
+          this.logAgent(task.assigned, `Requesting safety clearance to modify ${task.path}`);
+          
+          let details = `Modify code inside ${task.path.split('/').pop()}`;
+          let codeToInject = '';
+          let replacedCode = '';
+          
+          const fileNode = this.state.resolvePath(task.path);
+          const originalCode = fileNode ? (fileNode.content || '') : '';
+          
+          if (task.path.endsWith('index.js')) {
+            details = 'Inject new routing endpoints for Astra Agent Council inside index.js.';
+            const injectionTarget = `// TODO: Implement the express endpoints for agent council communication`;
+            
+            // If it is the recovery fix step, write clean code. Otherwise write syntax error first!
+            if (task.recoveryFix) {
+              codeToInject = `// Implement the express endpoints for agent council communication
 app.post('/api/v1/council', (req, res) => {
   const { command, payload } = req.body;
   console.log(\`[Council] Received instruction: \${window.escapeHTML(command)}\`);
   res.status(200).json({ success: true, message: 'Command queued' });
 });`;
-
-          const replacedCode = originalCode.replace(injectionTarget, codeToInject);
-          
-          if (textarea.id === 'editor-text-area') {
-            await this.animateEditorTyping(textarea, originalCode, injectionTarget, codeToInject);
+            } else {
+              // Intentionally inject syntax error: unbalanced brackets on line 20
+              codeToInject = `// Implement the express endpoints for agent council communication
+app.post('/api/v1/council', (req, res) => {
+  const { command, payload } = req.body;
+  console.log(\`[Council] Received instruction: \${window.escapeHTML(command)})\`);
+  res.status(200).json({ success: true, message: 'Command queued' });
+});`;
+            }
+            replacedCode = originalCode.replace(injectionTarget, codeToInject);
+          } else if (task.path.endsWith('README.md')) {
+            details = 'Document gateway routes in README.md';
+            codeToInject = '\n### Council Endpoint\n- **URL:** `/api/v1/council`\n- **Method:** `POST`\n- **Payload:** `{ "command": String, "payload": Object }`\n';
+            replacedCode = originalCode + codeToInject;
           } else {
-            textarea.value = replacedCode;
+            replacedCode = originalCode + '\n// Astra Agent modification\n';
           }
           
-          this.backupFileBeforeChange('/Project_Astra/index.js');
-          this.state.writeFile('/Project_Astra/index.js', replacedCode);
-          this.ui.showToast('Task Completed', 'ExecutorAgent implemented routing endpoints.', 'success');
-          this.state.updateTaskStatus('task-2', 'completed');
-          this.state.appendWorkflowStep(workflow.id, {
-            title: 'Modify /Project_Astra/index.js',
-            assigned: 'ExecutorAgent',
-            status: 'completed',
-            confidence: 92
-          });
-          if (window.refreshTasksBoard) window.refreshTasksBoard();
-
-          this.afkSummaryData.filesModified.push('/Project_Astra/index.js');
-          this.afkSummaryData.tasksCompleted++;
-        }
-        await this.delay(2000);
-      }
-
-      if (startStepIndex <= 3) {
-        this.logAgent('WatcherAgent', 'Verifying compile health of Project Astra...');
-        this.ui.openApp('terminal');
-        await this.delay(1000);
-        
-        this.logAgent('WatcherAgent', 'Running command inside terminal: npm run build');
-        if (window.printTerminalRow) {
-          window.printTerminalRow('divyanshu@astra:~$ npm run build');
-        }
-        
-        this.state.updateTaskStatus('task-3', 'progress');
-        if (window.refreshTasksBoard) window.refreshTasksBoard();
-        
-        await this.delay(1500);
-
-        if (window.printTerminalRow) {
-          window.printTerminalRow('  [1/2] Parsing configurations...');
-          window.printTerminalRow('  [2/2] Validating node AST structures...');
-          window.printTerminalRow('  Error: SyntaxError: Unexpected token ) in index.js on line 20');
-          window.printTerminalRow('  Build failed.');
-        }
-        this.logAgent('WatcherAgent', 'Build compilation failed. Intercepted syntax error.', 'alert');
-        this.ui.showToast('Build Failed', 'Compiler syntax error detected.', 'error');
-        
-        this.state.appendWorkflowStep(workflow.id, {
-          title: 'Verify build compilation',
-          assigned: 'WatcherAgent',
-          status: 'failed',
-          error: 'SYNTAX_ERROR',
-          confidence: 45
-        });
-        
-        await this.delay(2000);
-
-        this.logAgent('PlannerAgent', 'Adapting plan: Created dynamic task to solve compilation syntax error.', 'alert');
-        this.state.agentTasks.splice(3, 0, {
-          id: 'task-fix',
-          title: 'Fix compiler syntax error',
-          desc: 'Verify and resolve double parenthesis syntax error inside index.js',
-          status: 'pending',
-          assigned: 'ExecutorAgent'
-        });
-        this.state.saveState();
-        if (window.refreshTasksBoard) window.refreshTasksBoard();
-        await this.delay(2000);
-
-        this.logAgent('ExecutorAgent', 'Fixing parenthesis mismatch on line 20 of index.js');
-        const freshCode = this.state.resolvePath('/Project_Astra/index.js').content;
-        const fixedCode = freshCode.replace('console.log(`[Council] Received instruction: ${window.escapeHTML(command)}`);', 'console.log(`[Council] Received instruction: ${window.escapeHTML(command)}`);'); 
-        
-        const textarea = document.getElementById('editor-text-area') || document.getElementById('editor-content');
-        if (textarea) {
-          this.state.updateTaskStatus('task-fix', 'progress');
-          if (window.refreshTasksBoard) window.refreshTasksBoard();
+          const approved = await this.checkSafetyPolicy('write_file', task.path, details);
           
-          textarea.value = fixedCode;
-          this.backupFileBeforeChange('/Project_Astra/index.js');
-          this.state.writeFile('/Project_Astra/index.js', fixedCode);
+          if (!approved) {
+            this.logAgent('SafetyLayer', 'Permission denied by user. Halting execution loop.', 'alert');
+            this.state.updateWorkflow(workflow.id, { status: 'blocked' });
+            this.ui.showToast('Orchestration Halted', 'Safety layer denied modification permissions.', 'error');
+            this.state.appendWorkflowStep(workflow.id, {
+              title: `Modify ${task.path.split('/').pop()}`,
+              assigned: 'SafetyLayer',
+              status: 'failed',
+              error: 'PERMISSION_DENIED',
+              confidence: 30
+            });
+            this.state.updateTaskStatus(task.id, 'pending');
+            this.setAgentIdle();
+            this.activeWorkflow = false;
+            return;
+          }
+          
+          this.logAgent('SafetyLayer', 'Permission approved. Resuming execution task.', 'success');
           await this.delay(1000);
           
-          this.state.updateTaskStatus('task-fix', 'completed');
-          this.state.appendWorkflowStep(workflow.id, {
-            title: 'Fix syntax mismatch',
-            assigned: 'ExecutorAgent',
-            status: 'completed',
-            confidence: 96
-          });
-          if (window.refreshTasksBoard) window.refreshTasksBoard();
-          this.logAgent('ExecutorAgent', 'Syntax error successfully resolved.', 'success');
+          this.logAgent(task.assigned, `Writing modifications inside ${task.path}`);
           
-          this.afkSummaryData.tasksCompleted++;
-        }
-        await this.delay(2000);
-
-        this.logAgent('WatcherAgent', 'Re-compiling gateway structures: npm run build');
-        if (window.printTerminalRow) {
-          window.printTerminalRow('divyanshu@astra:~$ npm run build');
-          window.printTerminalRow('  [1/2] Parsing configurations...');
-          window.printTerminalRow('  [2/2] Validating node AST structures...');
-          window.printTerminalRow('  Build complete. Output bundle verified successfully.');
-        }
-        await this.delay(1000);
-        this.logAgent('WatcherAgent', 'Build compiled successfully without errors.', 'success');
-        this.ui.showToast('Build Passed', 'Gateway compiled cleanly.', 'success');
-        this.state.updateWorkflow(workflow.id, { status: 'completed' });
-        
-        this.state.updateTaskStatus('task-3', 'completed');
-        this.state.appendWorkflowStep(workflow.id, {
-          title: 'Verify build compilation retry',
-          assigned: 'WatcherAgent',
-          status: 'completed',
-          confidence: 99
-        });
-        if (window.refreshTasksBoard) window.refreshTasksBoard();
-        this.afkSummaryData.tasksCompleted++;
-        await this.delay(2000);
-      }
-
-      if (startStepIndex <= 4) {
-        this.logAgent('MemoryAgent', 'Parsing index.js routing endpoints to update semantic index');
-        this.state.addMemoryNode('endpoint-council', 'Route: /api/v1/council', 'endpoint');
-        this.state.addMemoryLink('file-index', 'endpoint-council', 'defines');
-        this.state.addMemoryLink('usr-divyanshu', 'endpoint-council', 'interacts_with');
-        
-        this.afkSummaryData.memoriesCreated += 2;
-        this.state.appendWorkflowStep(workflow.id, {
-          title: 'Update memory relationships',
-          assigned: 'MemoryAgent',
-          status: 'completed',
-          confidence: 97
-        });
-        if (window.refreshSidebarMemories) window.refreshSidebarMemories();
-        if (window.drawMemoryGraphApp) window.drawMemoryGraphApp();
-        await this.delay(2000);
-      }
-
-      if (startStepIndex <= 5) {
-        this.logAgent('ExecutorAgent', 'Modifying README.md file to document endpoint');
-        const readmeFile = this.state.resolvePath('/Project_Astra/README.md');
-        if (readmeFile) {
-          this.state.updateTaskStatus('task-4', 'progress');
-          if (window.refreshTasksBoard) window.refreshTasksBoard();
-
-          const newReadme = readmeFile.content + '\n### Council Endpoint\n- **URL:** `/api/v1/council`\n- **Method:** `POST`\n- **Payload:** `{ "command": String, "payload": Object }`\n';
-          this.backupFileBeforeChange('/Project_Astra/README.md');
-          this.state.writeFile('/Project_Astra/README.md', newReadme);
-          
+          this.ui.openApp('editor');
           const textarea = document.getElementById('editor-text-area') || document.getElementById('editor-content');
-          const activeFile = document.getElementById('context-file')?.textContent;
-          if (activeFile === 'README.md' && textarea) {
-            textarea.value = newReadme;
+          if (textarea) {
+            if (window.editorOpenFile) {
+              window.editorOpenFile(task.path);
+            }
+            if (textarea.id === 'editor-text-area' && task.path.endsWith('index.js')) {
+              await this.animateEditorTyping(textarea, originalCode, `// TODO: Implement the express endpoints for agent council communication`, codeToInject);
+            } else {
+              textarea.value = replacedCode;
+            }
           }
           
-          this.state.updateTaskStatus('task-4', 'completed');
+          this.backupFileBeforeChange(task.path);
+          this.state.writeFile(task.path, replacedCode);
+          this.ui.showToast('Task Completed', `${task.assigned} modified ${task.path.split('/').pop()}.`, 'success');
+          
           this.state.appendWorkflowStep(workflow.id, {
-            title: 'Document API endpoints',
-            assigned: 'ExecutorAgent',
+            title: task.recoveryFix ? 'Fix syntax mismatch' : `Modify ${task.path.split('/').pop()}`,
+            assigned: task.assigned,
             status: 'completed',
-            confidence: 94
+            confidence: 93
           });
-          if (window.refreshTasksBoard) window.refreshTasksBoard();
-          this.ui.showToast('Documentation Updated', 'README.md file rewritten.', 'success');
-
-          this.afkSummaryData.filesModified.push('/Project_Astra/README.md');
+          this.state.updateTaskStatus(task.id, 'completed');
+          this.afkSummaryData.filesModified.push(task.path);
           this.afkSummaryData.tasksCompleted++;
+          
+        } else if (task.action === 'npm run build') {
+          this.logAgent(task.assigned, 'Verifying compilation and build integrity...');
+          this.ui.openApp('terminal');
+          await this.delay(1000);
+          
+          this.logAgent(task.assigned, 'Running command inside terminal: npm run build');
+          if (window.printTerminalRow) {
+            window.printTerminalRow('divyanshu@astra:~$ npm run build');
+          }
+          
+          const stepHistory = workflow.steps.filter(s => s.title.includes('Verify build'));
+          const isRetry = stepHistory.length > 0;
+          
+          await this.delay(1500);
+          
+          if (!isRetry && task.id === 'task-3' && this.state.resolvePath('/Project_Astra/index.js')) {
+            if (window.printTerminalRow) {
+              window.printTerminalRow('  [1/2] Parsing configurations...');
+              window.printTerminalRow('  [2/2] Validating node AST structures...');
+              window.printTerminalRow('  Error: SyntaxError: Unexpected token ) in index.js on line 20');
+              window.printTerminalRow('  Build failed.');
+            }
+            this.logAgent(task.assigned, 'Build compilation failed. Intercepted syntax error.', 'alert');
+            this.ui.showToast('Build Failed', 'Compiler syntax error detected.', 'error');
+            
+            this.state.appendWorkflowStep(workflow.id, {
+              title: 'Verify build compilation',
+              assigned: task.assigned,
+              status: 'failed',
+              error: 'SYNTAX_ERROR',
+              confidence: 45
+            });
+            
+            await this.delay(2000);
+            
+            this.logAgent('PlannerAgent', 'Adapting plan: Created dynamic task to solve compilation syntax error.', 'alert');
+            this.state.agentTasks.splice(stepIndex + 1, 0, {
+              id: 'task-fix',
+              title: 'Fix compiler syntax error',
+              desc: 'Verify and resolve double parenthesis syntax error inside index.js',
+              status: 'pending',
+              assigned: 'ExecutorAgent',
+              action: 'fs:write',
+              path: '/Project_Astra/index.js',
+              recoveryFix: true
+            });
+            this.state.saveState();
+            if (window.refreshTasksBoard) window.refreshTasksBoard();
+            
+            this.state.updateTaskStatus(task.id, 'pending');
+            await this.delay(2000);
+            
+          } else {
+            if (window.printTerminalRow) {
+              window.printTerminalRow('  [1/2] Parsing configurations...');
+              window.printTerminalRow('  [2/2] Validating node AST structures...');
+              window.printTerminalRow('  Build complete. Output bundle verified successfully.');
+            }
+            this.logAgent(task.assigned, 'Build compiled successfully without errors.', 'success');
+            this.ui.showToast('Build Passed', 'Gateway compiled cleanly.', 'success');
+            
+            this.state.appendWorkflowStep(workflow.id, {
+              title: isRetry ? 'Verify build compilation retry' : 'Verify build compilation',
+              assigned: task.assigned,
+              status: 'completed',
+              confidence: 99
+            });
+            this.state.updateTaskStatus(task.id, 'completed');
+            this.afkSummaryData.tasksCompleted++;
+          }
         }
-        await this.delay(1800);
+        
+        this.state.saveState();
+        if (window.refreshTasksBoard) window.refreshTasksBoard();
+        
+        stepIndex++;
+        await this.delay(2000);
       }
-
+      
+      this.logAgent('MemoryAgent', 'Parsing index.js routing endpoints to update semantic index');
+      this.state.addMemoryNode('endpoint-council', 'Route: /api/v1/council', 'endpoint');
+      this.state.addMemoryLink('file-index', 'endpoint-council', 'defines');
+      this.state.addMemoryLink('usr-divyanshu', 'endpoint-council', 'interacts_with');
+      this.afkSummaryData.memoriesCreated += 2;
+      
+      this.state.appendWorkflowStep(workflow.id, {
+        title: 'Update memory relationships',
+        assigned: 'MemoryAgent',
+        status: 'completed',
+        confidence: 97
+      });
+      if (window.refreshSidebarMemories) window.refreshSidebarMemories();
+      if (window.drawMemoryGraphApp) window.drawMemoryGraphApp();
+      
       this.logAgent('System', 'Astra orchestration tasks completed successfully.', 'success');
       this.ui.showToast('Orchestration Succeeded', 'Astra finished all delegated tasks.', 'success');
       
+      this.state.updateWorkflow(workflow.id, { status: 'completed' });
       this.setAgentIdle();
       this.activeWorkflow = false;
 
