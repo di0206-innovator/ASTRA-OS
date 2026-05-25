@@ -4,6 +4,7 @@
 
 export class OSState {
   constructor() {
+    this.schemaVersion = 2;
     this.fs = {};
     this.memoryGraph = { nodes: [], links: [] };
     this.processes = {};
@@ -23,6 +24,8 @@ export class OSState {
     this.notifications = [];
     this.trash = [];
     this.locks = [];
+    this.workflows = [];
+    this.eventLog = [];
     this.env = { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
 
     this.systemVars = {
@@ -66,6 +69,8 @@ export class OSState {
             if (parsed.registry) this.registry = parsed.registry;
             if (parsed.processTable) this.processTable = parsed.processTable;
             if (parsed.env) this.env = parsed.env;
+            if (parsed.workflows) this.workflows = parsed.workflows;
+            if (parsed.eventLog) this.eventLog = parsed.eventLog;
             console.log('[IndexedDB] Successfully loaded state.');
             if (window.refreshExplorerGrid) window.refreshExplorerGrid();
             if (window.refreshTasksBoard) window.refreshTasksBoard();
@@ -99,6 +104,8 @@ export class OSState {
         this.gitRepos = parsed.gitRepos || {};
         this.hardware = parsed.hardware || {};
         this.registry = parsed.registry || {};
+        this.workflows = parsed.workflows || [];
+        this.eventLog = parsed.eventLog || [];
         if (!this.registry.ai) {
           this.registry.ai = {
             provider: 'gemini',
@@ -220,6 +227,8 @@ export class OSState {
     this.notifications = [];
     this.trash = [];
     this.env = { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
+    this.workflows = [];
+    this.eventLog = [];
     this.currentSession = {
       currentUser: 'divyanshu',
       uid: 1000,
@@ -503,7 +512,8 @@ export class OSState {
       'diskutil': { open: false, minimized: false, x: 300, y: 140, w: 640, h: 420, zIndex: 22 },
       'dailybriefing': { open: false, minimized: false, x: 220, y: 120, w: 680, h: 480, zIndex: 23 },
       'trust': { open: false, minimized: false, x: 140, y: 90, w: 720, h: 500, zIndex: 24 },
-      'timeline': { open: false, minimized: false, x: 260, y: 130, w: 700, h: 480, zIndex: 25 }
+      'timeline': { open: false, minimized: false, x: 260, y: 130, w: 700, h: 480, zIndex: 25 },
+      'workflow': { open: false, minimized: false, x: 180, y: 100, w: 760, h: 520, zIndex: 26 }
     };
   }
 
@@ -570,6 +580,7 @@ export class OSState {
 
   _executeSaveState() {
     const raw = {
+      schemaVersion: this.schemaVersion,
       fs: this.fs,
       memoryGraph: this.memoryGraph,
       processes: this.processes,
@@ -588,6 +599,8 @@ export class OSState {
       notifications: this.notifications,
       trash: this.trash,
       locks: this.locks,
+      workflows: this.workflows,
+      eventLog: this.eventLog.slice(-500),
       env: this.env
     };
 
@@ -609,6 +622,113 @@ export class OSState {
         localStorage.setItem('astra_os_state', JSON.stringify({ ...raw, fs: {}, auditLogs: [] }));
       } catch (e2) { /* give up */ }
     }
+  }
+
+  logEvent(type, source, detail = {}) {
+    this.eventLog.push({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      type,
+      source,
+      detail,
+      timestamp: Date.now()
+    });
+    if (this.eventLog.length > 1000) this.eventLog.shift();
+  }
+
+  createWorkflow(goal, prompt, createdBy = 'User') {
+    const workflow = {
+      id: `wf-${Date.now()}`,
+      goal,
+      prompt,
+      createdBy,
+      status: 'queued',
+      steps: [],
+      approvals: [],
+      results: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.workflows.unshift(workflow);
+    this.logEvent('workflow.created', createdBy, { workflowId: workflow.id, goal });
+    this.saveState();
+    return workflow;
+  }
+
+  updateWorkflow(id, patch = {}) {
+    const workflow = this.workflows.find(w => w.id === id);
+    if (!workflow) return null;
+    Object.assign(workflow, patch, { updatedAt: Date.now() });
+    this.logEvent('workflow.updated', 'System', { workflowId: id, patch });
+    this.saveState();
+    return workflow;
+  }
+
+  appendWorkflowStep(id, step) {
+    const workflow = this.workflows.find(w => w.id === id);
+    if (!workflow) return null;
+    workflow.steps.push({
+      id: `step-${workflow.steps.length + 1}`,
+      status: 'pending',
+      ...step,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    workflow.updatedAt = Date.now();
+    this.logEvent('workflow.step', 'System', { workflowId: id, step: step.title || step.name || step.id });
+    this.saveState();
+    return workflow;
+  }
+
+  recordApproval(id, approval) {
+    const workflow = this.workflows.find(w => w.id === id);
+    if (!workflow) return null;
+    workflow.approvals.push({ ...approval, timestamp: Date.now() });
+    workflow.updatedAt = Date.now();
+    this.logEvent('workflow.approval', approval.actor || 'User', { workflowId: id, approval });
+    this.saveState();
+    return workflow;
+  }
+
+  runIntegrityChecks() {
+    const issues = [];
+
+    const requiredApps = ['explorer', 'editor', 'terminal', 'settings', 'dashboard', 'workflow'];
+    requiredApps.forEach(appId => {
+      if (!this.processes[appId]) {
+        issues.push(`Missing app process record: ${appId}`);
+      }
+    });
+
+    if (!this.registry?.system?.hostname) {
+      issues.push('Missing system hostname');
+    }
+
+    if (!this.registry?.ai) {
+      issues.push('Missing AI registry configuration');
+    }
+
+    if (!this.currentSession?.currentUser) {
+      issues.push('Missing active user session');
+    }
+
+    if (!Array.isArray(this.workflows)) {
+      issues.push('Workflow store is corrupted');
+    }
+
+    if (!this.fs?.root) {
+      issues.push('Root filesystem is unavailable');
+    }
+
+    if (issues.length > 0) {
+      issues.forEach(issue => this.addNotification('warning', 'Integrity Check', issue));
+      this.addAuditLog('System', `Integrity check found ${issues.length} issue(s).`);
+    } else {
+      this.addAuditLog('System', 'Integrity check passed with no issues.');
+    }
+
+    this.logEvent('system.integrity', 'System', { issues });
+    this.saveState();
+    return issues;
   }
 
   // ==========================================
@@ -635,6 +755,40 @@ export class OSState {
     }
     this.saveState();
     return true;
+  }
+
+  getNodeMetadata(node) {
+    if (!node) return null;
+    if (!node.createdAt) node.createdAt = Date.now();
+    if (!node.updatedAt) node.updatedAt = node.createdAt;
+    if (!node.accessedAt) node.accessedAt = node.updatedAt;
+    return node;
+  }
+
+  touchNode(node) {
+    if (!node) return node;
+    node.accessedAt = Date.now();
+    return node;
+  }
+
+  canModifyNode(node, user = null) {
+    if (!node) return false;
+    if (!this.registry?.security?.enforcePermissions) return true;
+    const current = user || this.currentSession.currentUser || 'divyanshu';
+    const owner = node.owner || 'divyanshu';
+    if (current === owner || this.currentSession.role === 'admin') return true;
+    const perms = node.permissions || (node.type === 'dir' ? 'rwxr-xr-x' : 'rw-r--r--');
+    return perms[1] === 'w' || perms[4] === 'w' || perms[7] === 'w';
+  }
+
+  canReadNode(node, user = null) {
+    if (!node) return false;
+    if (!this.registry?.security?.enforcePermissions) return true;
+    const current = user || this.currentSession.currentUser || 'divyanshu';
+    const owner = node.owner || 'divyanshu';
+    if (current === owner || this.currentSession.role === 'admin') return true;
+    const perms = node.permissions || (node.type === 'dir' ? 'rwxr-xr-x' : 'rw-r--r--');
+    return perms[0] === 'r' || perms[3] === 'r' || perms[6] === 'r';
   }
 
   unlockPath(path, owner) {
@@ -670,7 +824,7 @@ export class OSState {
       if (!current || current.type !== 'dir' || !safePart) return null;
       current = current.children[safePart];
     }
-    return current;
+    return this.touchNode(current);
   }
 
   writeFile(pathStr, content) {
@@ -686,15 +840,23 @@ export class OSState {
       }
       current = current.children[safePart];
     }
+    this.getNodeMetadata(current);
     const isNew = !current.children[fileName];
+    if (current.children[fileName] && !this.canModifyNode(current.children[fileName])) {
+      return false;
+    }
     current.children[fileName] = {
       type: 'file', name: fileName, content,
       owner: (current.children[fileName] && current.children[fileName].owner) || this.currentSession.currentUser || 'divyanshu',
       group: 'staff',
-      permissions: (current.children[fileName] && current.children[fileName].permissions) || 'rw-r--r--'
+      permissions: (current.children[fileName] && current.children[fileName].permissions) || 'rw-r--r--',
+      createdAt: (current.children[fileName] && current.children[fileName].createdAt) || Date.now(),
+      updatedAt: Date.now(),
+      accessedAt: Date.now()
     };
     const actionText = isNew ? `Created file: ${pathStr}` : `Modified file: ${pathStr}`;
     this.addAuditLog('System', actionText);
+    window.AstraBus?.emit('fs.changed', { path: pathStr, action: actionText });
     this.saveState();
     return true;
   }
@@ -710,6 +872,7 @@ export class OSState {
       }
       current = current.children[safePart];
     }
+    this.getNodeMetadata(current);
     this.saveState();
     return true;
   }
@@ -725,8 +888,10 @@ export class OSState {
       current = current.children[safePart];
     }
     if (current.children[fileName]) {
+      if (!this.canModifyNode(current.children[fileName])) return false;
       delete current.children[fileName];
       this.addAuditLog('System', `Deleted: ${pathStr}`);
+      window.AstraBus?.emit('fs.deleted', { path: pathStr });
       this.saveState();
       return true;
     }
@@ -745,11 +910,14 @@ export class OSState {
       current = current.children[safePart];
     }
     if (current.children[oldName]) {
+      if (!this.canModifyNode(current.children[oldName])) return false;
       const node = current.children[oldName];
       node.name = safeNewName;
+      node.updatedAt = Date.now();
       current.children[safeNewName] = node;
       delete current.children[oldName];
       this.addAuditLog('System', `Renamed ${oldName} → ${safeNewName}`);
+      window.AstraBus?.emit('fs.renamed', { from: pathStr, to: safeNewName });
       this.saveState();
       return true;
     }
@@ -759,6 +927,7 @@ export class OSState {
   copyFile(srcPath, dstPath) {
     const srcNode = this.resolvePath(srcPath);
     if (!srcNode || srcNode.type !== 'file') return false;
+    if (!this.canReadNode(srcNode) || !this.canModifyNode(this.resolvePath(dstPath)?.parent || srcNode)) return false;
     this.writeFile(dstPath, srcNode.content);
     return true;
   }

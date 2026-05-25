@@ -7,6 +7,7 @@ import { OSState } from './state.js';
 import { Kernel } from './kernel.js';
 import { UIController } from './ui.js';
 import { AgentOrchestrator } from './agents.js';
+import { EventBus, AppRuntime } from './runtime.js';
 import './apps.js';
 import './apps-system.js';
 import './apps-tools.js';
@@ -14,13 +15,41 @@ import './apps-tools.js';
 function bootOS() {
   // 1. Initialize State, UI, and Agents
   const state = new OSState();
+  const bus = new EventBus();
   window.AstraKernel = new Kernel(state);
   const ui = new UIController(state);
   ui.init();
   const orchestrator = new AgentOrchestrator(state, ui);
+  const runtime = new AppRuntime({ state, kernel: window.AstraKernel, ui, bus });
+  window.AstraBus = bus;
+  window.AstraRuntime = runtime;
 
   // Expose key hooks globally so simulated apps in js/apps.js can trigger them
   window.AstraUI = ui;
+  window.AstraBus.emit('system.booted', { stateVersion: state.schemaVersion });
+  window.AstraBus.on('workflow.created', () => {
+    ui.updateNotifBadge?.();
+    window.refreshTasksBoard?.();
+    state.addNotification('info', 'Workflow Engine', 'A new agent workflow has been created.');
+  });
+  window.AstraBus.on('workflow.updated', () => {
+    ui.updateNotifBadge?.();
+    window.refreshTasksBoard?.();
+    state.addNotification('info', 'Workflow Engine', 'An agent workflow was updated.');
+  });
+  window.AstraBus.on('fs.changed', () => {
+    window.refreshExplorerGrid?.();
+    window.drawMemoryGraphApp?.();
+  });
+  window.AstraBus.on('fs.deleted', () => {
+    window.refreshExplorerGrid?.();
+  });
+  window.AstraBus.on('process.spawned', () => {
+    window.refreshDashboardLogs?.();
+  });
+  window.AstraBus.on('process.killed', () => {
+    window.refreshDashboardLogs?.();
+  });
   window.editorOpenFile = (path) => {
     ui.openApp('editor');
     setTimeout(() => {
@@ -49,6 +78,12 @@ function bootOS() {
       window.AstraApps.tasks(tasksBody, ui);
     }
   };
+  window.refreshDashboardLogs = () => {
+    const dashboardBody = document.querySelector('.window[data-app="dashboard"] .window-body');
+    if (dashboardBody && window.AstraApps.dashboard) {
+      window.AstraApps.dashboard(dashboardBody, ui);
+    }
+  };
 
   // ==========================================
   // 2. Open Pre-configured Windows on Startup
@@ -72,6 +107,7 @@ function bootOS() {
     ui.openApp('tasks');
   }
 
+  state.runIntegrityChecks();
   refreshSidebarMemories();
 
   // ==========================================
@@ -112,6 +148,11 @@ function bootOS() {
         ui.openApp('memory');
       } else if (val.includes('tasks') || val.includes('board')) {
         ui.openApp('tasks');
+      } else if (val.includes('workflow') || val.includes('approval')) {
+        ui.openApp('workflow');
+      } else if (val.includes('health') || val.includes('system check')) {
+        ui.openApp('dashboard');
+        ui.showToast('System Health', 'Open the dashboard or run `health` in terminal for detailed checks.', 'info');
       } else if (val.includes('clear')) {
         state.clearMemoryGraph();
         refreshSidebarMemories();
@@ -136,6 +177,7 @@ function bootOS() {
       else if (command === 'open-editor') ui.openApp('editor');
       else if (command === 'open-memory') ui.openApp('memory');
       else if (command === 'open-tasks') ui.openApp('tasks');
+      else if (command === 'open-workflow') ui.openApp('workflow');
       else if (command === 'open-terminal') ui.openApp('terminal');
       else if (command === 'go-afk') toggleAFK(true);
       else if (command === 'sys-reset') {
@@ -147,6 +189,11 @@ function bootOS() {
       else if (command === 'ai-continue') triggerAgentWorkflow();
       else if (command === 'ai-summarize') triggerChatSearch('Summarize my active workspace');
       else if (command === 'ai-organize') triggerChatSearch('Organize Project Directory');
+      else if (command === 'health-check') {
+        const issues = state.runIntegrityChecks();
+        ui.openApp('dashboard');
+        ui.showToast('System Health', issues.length === 0 ? 'No integrity issues found.' : `${issues.length} integrity issue(s) flagged.`, issues.length === 0 ? 'success' : 'warning');
+      }
       else if (command === 'ai-clear-memory') {
         state.clearMemoryGraph();
         refreshSidebarMemories();

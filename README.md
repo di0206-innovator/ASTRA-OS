@@ -1,6 +1,6 @@
 # Astra OS — AI-First Desktop Experience
 
-Astra OS is a browser-based, AI-first simulated desktop operating system. Built on vanilla HTML, CSS, and modern JavaScript, it implements custom systems-level primitives including a process scheduler, job control architecture, an environment variables block with POSIX-style substitution, a PATH executable resolver, and a sandboxed Web Worker execution context.
+Astra OS is a browser-based, AI-first desktop operating system platform. Built on vanilla HTML, CSS, and modern JavaScript, it now includes a runtime event bus, workflow records for agent actions, a virtual filesystem, a process table, a shell-style terminal, and sandboxed Web Worker execution for scripts.
 
 ---
 
@@ -8,9 +8,10 @@ Astra OS is a browser-based, AI-first simulated desktop operating system. Built 
 
 ### 1. Custom Systems Kernel
 The core operations of Astra OS are managed by a centralized `Kernel` class (`js/kernel.js`) running in the main thread:
-- **Process Management**: Spawns and tracks active processes in a simulated process table.
-- **VFS (Virtual File System)**: Interacts with an IndexedDB backend for persistent storage.
-- **Syscall Layer**: Implements a secure system call mechanism (`Astra.syscall`) allowing executing contexts to request resource mutations (such as file reads/writes, process spawning, and clipboard operations).
+- **Process Management**: Spawns and tracks active processes in a process table and emits lifecycle events.
+- **VFS (Virtual File System)**: Interacts with IndexedDB and localStorage for persistent storage.
+- **Syscall Layer**: Implements a system call mechanism (`Astra.syscall`) allowing executing contexts to request resource mutations such as file reads/writes, process spawning, and clipboard operations.
+- **Event Bus**: `js/runtime.js` provides a runtime bus so filesystem, process, and workflow changes can be observed by the UI and agent layer.
 
 ### 2. POSIX-Style Shell Upgrades
 - **Environment Variables**: Managed via state persistence. Supports `export KEY=VALUE`, `unset KEY`, and `env` commands.
@@ -30,6 +31,10 @@ The core operations of Astra OS are managed by a centralized `Kernel` class (`js
 
 ### 5. System-Wide Clipboard Bridge
 - Features a shared clipboard bridge allowing seamless clipboard operations (`pbcopy` and `pbpaste`) between the simulated operating system and the host system using standard browser Clipboard APIs.
+
+### 6. Agent Workflow Layer
+- Agent actions are tracked as workflows with steps, approvals, and status updates.
+- The agent orchestrator can draft a goal, record plan steps, emit system events, and persist outcomes for later inspection.
 
 ---
 

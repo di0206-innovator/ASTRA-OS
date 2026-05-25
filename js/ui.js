@@ -624,12 +624,14 @@ export class UIController {
       settings: '⚙️ Settings',
       sysmonitor: '📈 System Monitor',
       dashboard: '🤖 AI Dashboard',
+      workflow: '🧭 Workflow Console',
       devicemgr: '🛠️ Device Manager',
       diskutil: '💾 Disk Utility',
       calculator: '🧮 Calculator',
       dailybriefing: '📅 Daily Briefing',
       trust: '🛡️ Trust & Safety',
       timeline: '⏳ Cognitive Timeline',
+      workflow: '🧭 Workflow Console',
       astroid: '🎮 Astro Defender Game',
       pulsewave: '🎵 PulseWave Ambient Player'
     };

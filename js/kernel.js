@@ -110,6 +110,7 @@ export class Kernel {
     };
     this.state.processTable.push(proc);
     this.syslog('INFO', 'kernel', `Spawned process ${name} (PID ${pid})`);
+    window.AstraBus?.emit('process.spawned', { pid, name, parentPid });
     this.state.saveState();
     return proc;
   }
@@ -129,6 +130,7 @@ export class Kernel {
     }
     this.state.processTable.splice(idx, 1);
     this.syslog('INFO', 'kernel', `Killed process ${window.escapeHTML(proc.name)} (PID ${pid})`);
+    window.AstraBus?.emit('process.killed', { pid, name: proc.name });
     this.state.saveState();
     return { success: true, name: proc.name };
   }
@@ -326,8 +328,9 @@ export class Kernel {
 
   chmod(path, mode) {
     const node = this.state.resolvePath(path);
-    if (!node) return false;
+    if (!node || !this.state.canModifyNode(node)) return false;
     node.permissions = mode;
+    node.updatedAt = Date.now();
     this.syslog('INFO', 'fs', `chmod ${mode} ${path}`);
     this.state.saveState();
     return true;
@@ -335,8 +338,9 @@ export class Kernel {
 
   chown(path, owner) {
     const node = this.state.resolvePath(path);
-    if (!node) return false;
+    if (!node || !this.isAdmin()) return false;
     node.owner = owner;
+    node.updatedAt = Date.now();
     this.syslog('INFO', 'fs', `chown ${owner} ${path}`);
     this.state.saveState();
     return true;
@@ -410,7 +414,7 @@ export class Kernel {
   ping(host, count = 4) {
     const ip = this.resolveHost(host);
     if (!ip) return [`ping: ${host}: Name or service not known`];
-    const lines = [`PING ${host} (${ip}): 56 data byteshtml`];
+    const lines = [`PING ${host} (${ip}): 56 data bytes`];
     for (let i = 0; i < count; i++) {
       const time = (5 + Math.random() * 45).toFixed(1);
       lines.push(`64 bytes from ${ip}: icmp_seq=${i} ttl=64 time=${time} ms`);
@@ -790,7 +794,7 @@ export class Kernel {
 
   moveToTrash(path) {
     const node = this.state.resolvePath(path);
-    if (!node) return false;
+    if (!node || !this.state.canModifyNode(node)) return false;
     this.state.trash.push({ path, node: JSON.parse(JSON.stringify(node)), deletedAt: Date.now() });
     this.state.deleteFile(path);
     this.syslog('INFO', 'fs', `Moved to trash: ${path}`);
@@ -982,6 +986,7 @@ export class Kernel {
           'ENV:         export KEY=VALUE, unset KEY, env',
           'JOBS:        command &, jobs, fg [id], bg',
           'SYSTEM:      neofetch, uname, date, df, free, dmesg, clear, history, sysreset',
+          'HEALTH:      health',
           'FUN:         cowsay, fortune, sl, figlet (install via apt)',
           ''
         );
@@ -1115,7 +1120,10 @@ export class Kernel {
           break;
         }
         const path = this.resolveRelativePath(args[0], currentDir);
-        this.state.createDir(path);
+        if (!this.state.createDir(path)) {
+          output.push(`mkdir: cannot create directory '${args[0]}'`);
+          cls = 'error';
+        }
         break;
       }
       case 'touch': {
@@ -1125,7 +1133,17 @@ export class Kernel {
           break;
         }
         const path = this.resolveRelativePath(args[0], currentDir);
-        if (!this.state.resolvePath(path)) this.state.writeFile(path, '');
+        const existing = this.state.resolvePath(path);
+        if (!existing) {
+          if (!this.state.writeFile(path, '')) {
+            output.push(`touch: cannot create file '${args[0]}'`);
+            cls = 'error';
+          }
+        } else {
+          existing.updatedAt = Date.now();
+          existing.accessedAt = Date.now();
+          this.state.saveState();
+        }
         break;
       }
       case 'rm': {
@@ -1136,7 +1154,10 @@ export class Kernel {
         }
         const cleanPathArg = args[0].replace('-rf ', '').replace('-r ', '');
         const path = this.resolveRelativePath(cleanPathArg, currentDir);
-        this.moveToTrash(path);
+        if (!this.moveToTrash(path)) {
+          output.push(`rm: cannot remove '${cleanPathArg}'`);
+          cls = 'error';
+        }
         break;
       }
       case 'cp': {
@@ -1173,7 +1194,10 @@ export class Kernel {
           cls = 'error';
           break;
         }
-        this.chmod(this.resolveRelativePath(args[1], currentDir), args[0]);
+        if (!this.chmod(this.resolveRelativePath(args[1], currentDir), args[0])) {
+          output.push(`chmod: failed to change mode for '${args[1]}'`);
+          cls = 'error';
+        }
         break;
       }
       case 'chown': {
@@ -1182,7 +1206,10 @@ export class Kernel {
           cls = 'error';
           break;
         }
-        this.chown(this.resolveRelativePath(args[1], currentDir), args[0]);
+        if (!this.chown(this.resolveRelativePath(args[1], currentDir), args[0])) {
+          output.push(`chown: failed to change owner for '${args[1]}'`);
+          cls = 'error';
+        }
         break;
       }
       case 'tree': {
@@ -1667,6 +1694,17 @@ export class Kernel {
         output.push('⚠ Factory resetting Astra OS...');
         action = 'reset';
         break;
+      case 'health': {
+        const issues = this.state.runIntegrityChecks ? this.state.runIntegrityChecks() : [];
+        if (issues.length === 0) {
+          output.push('Astra OS health: OK');
+        } else {
+          output.push('Astra OS health: issues detected');
+          issues.forEach(issue => output.push(`- ${issue}`));
+          cls = 'warning';
+        }
+        break;
+      }
       case 'cowsay': {
         if (!this.isPackageInstalled('cowsay')) {
           output.push('cowsay: command not found. Install with: apt install cowsay');

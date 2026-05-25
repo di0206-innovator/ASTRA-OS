@@ -85,6 +85,11 @@ export class AgentOrchestrator {
     this.activeWorkflow = true;
     this.vfsSnapshots = {};
     this.isPaused = false;
+    this.currentWorkflow = this.state.createWorkflow(
+      userPrompt,
+      userPrompt,
+      this.state.currentSession.currentUser || 'User'
+    );
 
     // Reset tokens count to simulate execution expense
     this.state.systemVars.tokensConsumed += 1240;
@@ -103,6 +108,11 @@ export class AgentOrchestrator {
       { id: 'task-3', title: 'Compile and build index.js', desc: 'Run verify test suite compiler', status: 'pending', assigned: 'WatcherAgent' },
       { id: 'task-4', title: 'Link endpoints in README', desc: 'Document gateway routes in README.md', status: 'pending', assigned: 'MemoryAgent' }
     ];
+    this.state.appendWorkflowStep(this.currentWorkflow.id, {
+      title: 'Draft execution plan',
+      assigned: 'PlannerAgent',
+      status: 'completed'
+    });
     this.state.saveState();
     
     if (window.refreshTasksBoard) window.refreshTasksBoard();
@@ -131,6 +141,7 @@ export class AgentOrchestrator {
 
     if (!approved) {
       this.logAgent('SafetyLayer', 'Permission denied by user. Halting execution loop.', 'alert');
+      this.state.updateWorkflow(this.currentWorkflow.id, { status: 'blocked' });
       this.ui.showToast('Orchestration Halted', 'Safety layer denied modification permissions.', 'error');
       this.setAgentIdle();
       this.activeWorkflow = false;
@@ -168,6 +179,11 @@ app.post('/api/v1/council', (req, res) => {
       this.state.writeFile('/Project_Astra/index.js', replacedCode);
       this.ui.showToast('Task Completed', 'ExecutorAgent implemented routing endpoints.', 'success');
       this.state.updateTaskStatus('task-2', 'completed');
+      this.state.appendWorkflowStep(this.currentWorkflow.id, {
+        title: 'Modify /Project_Astra/index.js',
+        assigned: 'ExecutorAgent',
+        status: 'completed'
+      });
       if (window.refreshTasksBoard) window.refreshTasksBoard();
 
       this.afkSummaryData.filesModified.push('/Project_Astra/index.js');
@@ -253,6 +269,7 @@ app.post('/api/v1/council', (req, res) => {
     await this.delay(1000);
     this.logAgent('WatcherAgent', 'Build compiled successfully without errors.', 'success');
     this.ui.showToast('Build Passed', 'Gateway compiled cleanly.', 'success');
+    this.state.updateWorkflow(this.currentWorkflow.id, { status: 'completed' });
     
     this.state.updateTaskStatus('task-3', 'completed');
     if (window.refreshTasksBoard) window.refreshTasksBoard();

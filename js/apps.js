@@ -1051,11 +1051,13 @@ window.AstraApps.dashboard = function(container, ui) {
     const sv = ui.state.systemVars;
     const tasks = ui.state.agentTasks;
     const logs = ui.state.auditLogs;
+    const workflows = ui.state.workflows || [];
     const currentFocus = ui.state.registry.system?.focusMode || 'coding';
 
     const statsHTML = [
       { label: 'Active Agents', val: '5', color: 'var(--color-green)' },
       { label: 'Tasks Completed', val: String(tasks.filter(t => t.status === 'completed').length), color: 'var(--color-blue)' },
+      { label: 'Workflows', val: String(workflows.length), color: 'var(--color-amber)' },
       { label: 'Tokens Used', val: sv.tokensConsumed.toLocaleString(), color: 'var(--color-purple)' },
       { label: 'Focus Mode', val: currentFocus.toUpperCase(), color: 'var(--color-primary)' }
     ].map(s => `
@@ -1126,6 +1128,7 @@ window.AstraApps.dashboard = function(container, ui) {
 
     const gitRepo = Reflect.get(ui.state.gitRepos, '/Project_Astra');
     const gitBranch = gitRepo ? gitRepo.branch : 'main';
+    const latestWorkflow = workflows[0];
 
     window.renderSafeHTML(container, `
       <div class="dashboard-app">
@@ -1184,6 +1187,17 @@ window.AstraApps.dashboard = function(container, ui) {
             ${logsHTML}
           </div>
         </div>
+
+        <div class="dashboard-panel" style="flex-grow: 0; min-height: 120px;">
+          <h3>Latest Workflow</h3>
+          ${latestWorkflow ? `
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <div><strong>${window.escapeHTML(latestWorkflow.goal)}</strong></div>
+              <div style="font-size:11px;color:var(--text-secondary)">${window.escapeHTML(latestWorkflow.status)} • ${latestWorkflow.steps.length} steps • ${latestWorkflow.approvals.length} approvals</div>
+              <button class="btn btn-secondary" id="dashboard-open-workflow" style="width:max-content;">Open Workflow Console</button>
+            </div>
+          ` : '<div style="color:var(--text-muted)">No workflows available.</div>'}
+        </div>
       </div>
     `);
 
@@ -1203,6 +1217,9 @@ window.AstraApps.dashboard = function(container, ui) {
     container.querySelector('#dashboard-briefing')?.addEventListener('click', () => {
       ui.openApp('dailybriefing');
     });
+    container.querySelector('#dashboard-open-workflow')?.addEventListener('click', () => {
+      ui.openApp('workflow');
+    });
 
     container.querySelectorAll('[data-act]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1217,6 +1234,101 @@ window.AstraApps.dashboard = function(container, ui) {
           ui.openApp('tasks');
         }
       });
+    });
+  }
+
+  render();
+};
+
+// ==========================================
+// WORKFLOW CONSOLE
+// ==========================================
+window.AstraApps.workflow = function(container, ui) {
+  function render() {
+    const workflows = ui.state.workflows || [];
+    const current = workflows[0];
+    const timelineHTML = current ? current.steps.map(step => `
+      <div class="workflow-step ${step.status || 'pending'}">
+        <div class="workflow-step-head">
+          <strong>${window.escapeHTML(step.title || step.name || step.id)}</strong>
+          <span class="workflow-step-status">${window.escapeHTML(step.status || 'pending')}</span>
+        </div>
+        <div class="workflow-step-meta">
+          <span>Assigned: ${window.escapeHTML(step.assigned || 'System')}</span>
+          <span>${new Date(step.updatedAt || step.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+        </div>
+      </div>
+    `).join('') : '<div class="workflow-empty">No workflows recorded yet.</div>';
+
+    const workflowCards = workflows.slice(0, 8).map(wf => `
+      <div class="workflow-card ${wf.status}">
+        <div class="workflow-card-top">
+          <strong>${window.escapeHTML(wf.goal)}</strong>
+          <span>${window.escapeHTML(wf.status)}</span>
+        </div>
+        <div class="workflow-card-body">${window.escapeHTML(wf.prompt)}</div>
+        <div class="workflow-card-foot">
+          <span>${wf.steps.length} steps</span>
+          <span>${wf.approvals.length} approvals</span>
+        </div>
+      </div>
+    `).join('');
+    const approvalButtons = current ? `
+      <div class="workflow-approval-panel">
+        <h4>Latest Workflow Approval</h4>
+        <div class="workflow-approval-copy">${window.escapeHTML(current.goal)}</div>
+        <div class="workflow-approval-actions">
+          <button class="btn btn-primary btn-sm" id="wf-approve">Approve</button>
+          <button class="btn btn-secondary btn-sm" id="wf-reject">Reject</button>
+        </div>
+      </div>
+    ` : '<div class="workflow-empty">No active workflow to approve.</div>';
+
+    window.renderSafeHTML(container, `
+      <div class="workflow-app">
+        <div class="workflow-header">
+          <div>
+            <h3>Agent Workflow Console</h3>
+            <p style="color: var(--text-muted); font-size: 12px;">Track plans, approvals, and execution state in one place.</p>
+          </div>
+          <button class="btn btn-primary btn-sm" id="workflow-refresh">Refresh</button>
+        </div>
+        <div class="workflow-grid">
+          <div class="workflow-panel">
+            <h4>Recent Workflows</h4>
+            <div class="workflow-card-list">${workflowCards || '<div class="workflow-empty">No workflows yet.</div>'}</div>
+          </div>
+          <div class="workflow-panel">
+            <h4>Latest Workflow Steps</h4>
+            <div class="workflow-timeline">${timelineHTML}</div>
+            ${approvalButtons}
+          </div>
+        </div>
+      </div>
+    `);
+
+    container.querySelector('#workflow-refresh')?.addEventListener('click', render);
+    container.querySelector('#wf-approve')?.addEventListener('click', () => {
+      if (!current) return;
+      ui.state.recordApproval(current.id, {
+        actor: ui.state.currentSession.currentUser || 'User',
+        decision: 'approved',
+        note: 'Approved from workflow console'
+      });
+      ui.state.updateWorkflow(current.id, { status: 'approved' });
+      ui.showToast('Workflow Approved', current.goal, 'success');
+      render();
+    });
+    container.querySelector('#wf-reject')?.addEventListener('click', () => {
+      if (!current) return;
+      ui.state.recordApproval(current.id, {
+        actor: ui.state.currentSession.currentUser || 'User',
+        decision: 'rejected',
+        note: 'Rejected from workflow console'
+      });
+      ui.state.updateWorkflow(current.id, { status: 'rejected' });
+      ui.showToast('Workflow Rejected', current.goal, 'warning');
+      render();
     });
   }
 
