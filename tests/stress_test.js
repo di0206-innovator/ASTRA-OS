@@ -94,6 +94,11 @@ const ARTIFACTS_DIR = '/Users/divyanshusinha/.gemini/antigravity-ide/brain/f5e16
   await runCommand('echo "Astra OS System Test" > /testfile.txt');
   await runCommand('cat /testfile.txt');
   
+  // Test pipeline and logical chaining
+  await runCommand('cat /testfile.txt | grep System');
+  await runCommand('true && echo "success logic" || echo "failure logic"');
+  await runCommand('false && echo "success logic" || echo "failure logic"');
+  
   // Test PATH executable resolution
   // Create /bin/hello.sh with echo command
   await runCommand('mkdir -p /bin');

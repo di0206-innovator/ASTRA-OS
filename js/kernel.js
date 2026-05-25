@@ -890,124 +890,557 @@ export class Kernel {
     return null;
   }
 
-  executeCommand(rawCmd, currentDir, history = [], stdin = '') {
-    // Environment variable substitution ($VAR and ${VAR})
-    rawCmd = rawCmd.replace(/\$\{(\w+)\}|\$(\w+)/g, (match, braced, plain) => {
-      const varName = braced || plain;
-      return this.state.env[varName] !== undefined ? this.state.env[varName] : match;
-    });
-
-    const splitOutsideQuotes = (input, token) => {
-      const parts = [];
-      let buf = '';
-      let inQuotes = false;
-      let quoteChar = null;
-      for (let i = 0; i < input.length; i++) {
-        const ch = input[i];
-        if ((ch === '"' || ch === "'") && input[i - 1] !== '\\') {
-          if (!inQuotes) {
-            inQuotes = true;
-            quoteChar = ch;
-          } else if (quoteChar === ch) {
-            inQuotes = false;
-            quoteChar = null;
-          }
-        }
-        if (!inQuotes && input.slice(i, i + token.length) === token) {
-          parts.push(buf.trim());
-          buf = '';
-          i += token.length - 1;
-          continue;
-        }
-        buf += ch;
-      }
-      if (buf.trim()) parts.push(buf.trim());
-      return parts;
+  tokenize(input) {
+    const tokens = [];
+    let i = 0;
+    
+    const expandVars = (str) => {
+      return str.replace(/\$\{(\w+|\?)\}|\$(\w+|\?)/g, (match, braced, plain) => {
+        const varName = braced || plain;
+        return this.state.env[varName] !== undefined ? this.state.env[varName] : '';
+      });
     };
 
-    const pipeParts = splitOutsideQuotes(rawCmd, '|');
-    if (pipeParts.length > 1) {
-      return pipeParts.reduce((leftRes, segment, index) => {
-        const segmentInput = index === 0 ? stdin : (leftRes.output || []).join('\n');
-        return this.executeCommand(segment, currentDir, history, segmentInput);
-      }, { output: [] });
-    }
-
-    const andParts = splitOutsideQuotes(rawCmd, '&&');
-    if (andParts.length > 1) {
-      let chainRes = { output: [] };
-      for (const segment of andParts) {
-        chainRes = this.executeCommand(segment, currentDir, history, stdin);
-        if (chainRes.cls === 'error') break;
+    while (i < input.length) {
+      const ch = input[i];
+      if (/\s/.test(ch)) {
+        i++;
+        continue;
       }
-      return chainRes;
-    }
-
-    const orParts = splitOutsideQuotes(rawCmd, '||');
-    if (orParts.length > 1) {
-      let chainRes = { output: [], cls: 'error' };
-      for (const segment of orParts) {
-        if (chainRes.cls !== 'error') break;
-        chainRes = this.executeCommand(segment, currentDir, history, stdin);
-      }
-      return chainRes;
-    }
-
-    // Check for redirection
-    const redir = this.parseRedirection(rawCmd);
-    if (redir) {
-      const innerRes = this.executeCommand(redir.cmdPart, currentDir, history, stdin);
-      if (innerRes.cls === 'error') {
-        return innerRes;
-      }
-      const targetPath = this.resolveRelativePath(redir.filePart, currentDir);
       
-      if (innerRes.async) {
-        return {
-          async: true,
-          run: async (writeRow) => {
-            let capturedOutput = [];
-            const mockWriteRow = (text, cls) => {
-              capturedOutput.push(text);
-            };
-            await innerRes.run(mockWriteRow);
-            const outputStr = capturedOutput.join('\n');
-            if (redir.type === 'write') {
-              this.state.writeFile(targetPath, outputStr);
+      // Control operators
+      if (ch === '&' && input[i + 1] === '&') {
+        tokens.push({ type: 'AND', value: '&&' });
+        i += 2;
+        continue;
+      }
+      if (ch === '|' && input[i + 1] === '|') {
+        tokens.push({ type: 'OR', value: '||' });
+        i += 2;
+        continue;
+      }
+      if (ch === '&') {
+        tokens.push({ type: 'AMP', value: '&' });
+        i++;
+        continue;
+      }
+      if (ch === '|') {
+        tokens.push({ type: 'PIPE', value: '|' });
+        i++;
+        continue;
+      }
+      if (ch === ';') {
+        tokens.push({ type: 'SEMI', value: ';' });
+        i++;
+        continue;
+      }
+      if (ch === '(') {
+        tokens.push({ type: 'LPAREN', value: '(' });
+        i++;
+        continue;
+      }
+      if (ch === ')') {
+        tokens.push({ type: 'RPAREN', value: ')' });
+        i++;
+        continue;
+      }
+      
+      // Redirects
+      if (input.slice(i, i + 4) === '2>&1') {
+        tokens.push({ type: 'REDIRECT_STDERR_TO_STDOUT', value: '2>&1' });
+        i += 4;
+        continue;
+      }
+      if (input.slice(i, i + 2) === '2>') {
+        tokens.push({ type: 'REDIRECT_STDERR', value: '2>' });
+        i += 2;
+        continue;
+      }
+      if (input.slice(i, i + 2) === '>>') {
+        tokens.push({ type: 'REDIRECT_APPEND', value: '>>' });
+        i += 2;
+        continue;
+      }
+      if (ch === '>') {
+        tokens.push({ type: 'REDIRECT_WRITE', value: '>' });
+        i++;
+        continue;
+      }
+      
+      // Words/arguments
+      let value = '';
+      while (i < input.length) {
+        const char = input[i];
+        if (/\s/.test(char) || ['&', '|', ';', '(', ')', '>'].includes(char)) {
+          break;
+        }
+        if (char === '"') {
+          i++; // skip opening quote
+          let inner = '';
+          while (i < input.length && input[i] !== '"') {
+            if (input[i] === '\\' && input[i + 1] !== undefined) {
+              inner += input[i + 1];
+              i += 2;
             } else {
-              const node = this.state.resolvePath(targetPath);
-              const existing = (node && node.type === 'file') ? node.content : '';
-              const sep = (existing && !existing.endsWith('\n')) ? '\n' : '';
-              this.state.writeFile(targetPath, existing + sep + outputStr);
+              inner += input[i];
+              i++;
             }
-            writeRow(`Output redirected to ${redir.filePart}`);
           }
+          i++; // skip closing quote
+          value += expandVars(inner);
+        } else if (char === "'") {
+          i++; // skip opening quote
+          let inner = '';
+          while (i < input.length && input[i] !== "'") {
+            inner += input[i];
+            i++;
+          }
+          i++; // skip closing quote
+          value += inner; // No variable expansion for single quotes
+        } else {
+          // Plain character
+          let plainStr = '';
+          while (i < input.length) {
+            const innerChar = input[i];
+            if (/\s/.test(innerChar) || ['&', '|', ';', '(', ')', '>', '"', "'"].includes(innerChar)) {
+              break;
+            }
+            plainStr += innerChar;
+            i++;
+          }
+          value += expandVars(plainStr);
+        }
+      }
+      tokens.push({ type: 'ARG', value });
+    }
+    return tokens;
+  }
+
+  parseShell(tokens) {
+    let index = 0;
+    
+    const peek = () => tokens[index];
+    const next = () => tokens[index++];
+    
+    const parseList = () => {
+      let node = parseLogical();
+      while (peek() && (peek().type === 'SEMI' || peek().type === 'AMP')) {
+        const op = next();
+        const background = op.type === 'AMP';
+        const right = peek() ? parseList() : null;
+        node = {
+          type: 'sequence',
+          left: node,
+          right: right,
+          background: background
         };
       }
+      return node;
+    };
+    
+    const parseLogical = () => {
+      let node = parsePipeline();
+      while (peek() && (peek().type === 'AND' || peek().type === 'OR')) {
+        const op = next();
+        const right = parsePipeline();
+        node = {
+          type: op.type === 'AND' ? 'and' : 'or',
+          left: node,
+          right: right
+        };
+      }
+      return node;
+    };
+    
+    const parsePipeline = () => {
+      let node = parseCommand();
+      while (peek() && peek().type === 'PIPE') {
+        next();
+        const right = parseCommand();
+        node = {
+          type: 'pipeline',
+          left: node,
+          right: right
+        };
+      }
+      return node;
+    };
+    
+    const parseCommand = () => {
+      if (peek() && peek().type === 'LPAREN') {
+        next(); // Consume LPAREN
+        const body = parseList();
+        if (peek() && peek().type === 'RPAREN') {
+          next(); // Consume RPAREN
+        }
+        const node = {
+          type: 'subshell',
+          body: body,
+          redirects: []
+        };
+        parseRedirects(node);
+        return node;
+      }
+      
+      const node = {
+        type: 'command',
+        args: [],
+        redirects: []
+      };
+      
+      while (peek()) {
+        const tok = peek();
+        if (tok.type === 'ARG') {
+          node.args.push(next().value);
+        } else if (tok.type.startsWith('REDIRECT')) {
+          parseRedirects(node);
+        } else {
+          break;
+        }
+      }
+      return node;
+    };
+    
+    const parseRedirects = (node) => {
+      while (peek() && peek().type.startsWith('REDIRECT')) {
+        const op = next();
+        if (op.type === 'REDIRECT_STDERR_TO_STDOUT') {
+          node.redirects.push({ type: 'stderr_to_stdout' });
+        } else {
+          const targetTok = peek() && peek().type === 'ARG' ? next() : null;
+          const target = targetTok ? targetTok.value : '';
+          node.redirects.push({
+            type: op.type.toLowerCase().replace('redirect_', ''),
+            target: target
+          });
+        }
+      }
+    };
+    
+    return parseList();
+  }
 
-      const outputStr = (innerRes.output || []).join('\n');
+  astToString(node) {
+    if (!node) return '';
+    if (node.type === 'command') {
+      let str = node.args.join(' ');
+      node.redirects.forEach(r => {
+        if (r.type === 'stderr_to_stdout') str += ' 2>&1';
+        else if (r.type === 'write') str += ` > ${r.target}`;
+        else if (r.type === 'append') str += ` >> ${r.target}`;
+        else if (r.type === 'stderr') str += ` 2> ${r.target}`;
+      });
+      return str;
+    }
+    if (node.type === 'subshell') {
+      return `(${this.astToString(node.body)})`;
+    }
+    if (node.type === 'pipeline') {
+      return `${this.astToString(node.left)} | ${this.astToString(node.right)}`;
+    }
+    if (node.type === 'and') {
+      return `${this.astToString(node.left)} && ${this.astToString(node.right)}`;
+    }
+    if (node.type === 'or') {
+      return `${this.astToString(node.left)} || ${this.astToString(node.right)}`;
+    }
+    if (node.type === 'sequence') {
+      return `${this.astToString(node.left)}${node.background ? ' &' : ';'} ${this.astToString(node.right)}`;
+    }
+    return '';
+  }
+
+  applyRedirects(res, redirects, currentDir, writeRow) {
+    if (!redirects || redirects.length === 0) return res;
+    
+    let outputStr = (res.output || []).join('\n');
+    let stderrStr = res.cls === 'error' ? outputStr : '';
+    
+    redirects.forEach(redir => {
+      const targetPath = this.resolveRelativePath(redir.target || '', currentDir);
       if (redir.type === 'write') {
         this.state.writeFile(targetPath, outputStr);
-      } else {
+      } else if (redir.type === 'append') {
         const node = this.state.resolvePath(targetPath);
         const existing = (node && node.type === 'file') ? node.content : '';
         const sep = (existing && !existing.endsWith('\n')) ? '\n' : '';
         this.state.writeFile(targetPath, existing + sep + outputStr);
+      } else if (redir.type === 'stderr') {
+        this.state.writeFile(targetPath, stderrStr);
+      }
+    });
+    
+    return {
+      output: [],
+      cls: 'success',
+      newDir: res.newDir,
+      action: res.action,
+      toast: res.toast || `Output redirected`
+    };
+  }
+
+  executeAST(node, currentDir, history = [], stdin = '', writeRow = null) {
+    if (!node) return { output: [] };
+    
+    if (node.type === 'command') {
+      const res = this.executeSimpleCommand(node, currentDir, history, stdin, writeRow);
+      return this.applyRedirects(res, node.redirects, currentDir, writeRow);
+    }
+    
+    if (node.type === 'subshell') {
+      const innerRes = this.executeAST(node.body, currentDir, history, stdin, writeRow);
+      if (innerRes.async) {
+        return {
+          async: true,
+          run: async (wr) => {
+            let captured = [];
+            const localRes = await innerRes.run((t, c) => {
+              captured.push(t);
+              if (wr) wr(t, c);
+            });
+            const subRes = { output: captured, cls: localRes ? localRes.cls : 'success' };
+            return this.applyRedirects(subRes, node.redirects, currentDir, wr);
+          }
+        };
+      }
+      return this.applyRedirects(innerRes, node.redirects, currentDir, writeRow);
+    }
+    
+    if (node.type === 'sequence') {
+      if (node.background) {
+        const cmdStr = this.astToString(node.left);
+        const job = this.createJob(cmdStr);
+        
+        const runInBackground = async () => {
+          const handleOutput = (text, cls) => {
+            const currentJob = this.jobs.find(j => j.id === job.id);
+            if (currentJob) {
+              if (currentJob.foreground && writeRow) {
+                writeRow(text, cls);
+              } else {
+                currentJob.outputBuffer.push(text);
+              }
+            }
+          };
+          const leftRes = this.executeAST(node.left, currentDir, history, stdin, handleOutput);
+          if (leftRes.async) {
+            try {
+              const finalLeft = await leftRes.run(handleOutput);
+              const currentJob = this.jobs.find(j => j.id === job.id);
+              if (currentJob) {
+                currentJob.status = 'Done';
+                if (currentJob.foreground && writeRow) {
+                  writeRow(`[${currentJob.id}]  Done  ${currentJob.command}`);
+                  this.removeJob(currentJob.id);
+                }
+              }
+            } catch (err) {
+              const currentJob = this.jobs.find(j => j.id === job.id);
+              if (currentJob) currentJob.status = 'Failed';
+            }
+          } else {
+            const currentJob = this.jobs.find(j => j.id === job.id);
+            if (currentJob) {
+              currentJob.status = 'Done';
+              if (currentJob.foreground && writeRow) {
+                writeRow(`[${currentJob.id}]  Done  ${currentJob.command}`);
+                this.removeJob(currentJob.id);
+              }
+            }
+          }
+        };
+        
+        setTimeout(runInBackground, 0);
+        const startMsg = `[${job.id}] Background job started: ${cmdStr}`;
+        return { output: [startMsg], cls: 'success' };
+      } else {
+        const leftRes = this.executeAST(node.left, currentDir, history, stdin, writeRow);
+        if (leftRes.async) {
+          return {
+            async: true,
+            run: async (wr) => {
+              const finalLeft = await leftRes.run(wr);
+              this.state.env['?'] = finalLeft.cls === 'error' ? '1' : '0';
+              if (node.right) {
+                const rightRes = this.executeAST(node.right, currentDir, history, stdin, wr);
+                if (rightRes.async) {
+                  const finalRight = await rightRes.run(wr);
+                  this.state.env['?'] = finalRight.cls === 'error' ? '1' : '0';
+                  return finalRight;
+                }
+                this.state.env['?'] = rightRes.cls === 'error' ? '1' : '0';
+                return rightRes;
+              }
+              return finalLeft;
+            }
+          };
+        }
+        
+        this.state.env['?'] = leftRes.cls === 'error' ? '1' : '0';
+        if (node.right) {
+          const rightRes = this.executeAST(node.right, currentDir, history, stdin, writeRow);
+          if (rightRes.async) {
+            return {
+              async: true,
+              run: async (wr) => {
+                const finalRight = await rightRes.run(wr);
+                this.state.env['?'] = finalRight.cls === 'error' ? '1' : '0';
+                return finalRight;
+              }
+            };
+          }
+          this.state.env['?'] = rightRes.cls === 'error' ? '1' : '0';
+          return rightRes;
+        }
+        return leftRes;
+      }
+    }
+    
+    if (node.type === 'and') {
+      const leftRes = this.executeAST(node.left, currentDir, history, stdin, writeRow);
+      if (leftRes.async) {
+        return {
+          async: true,
+          run: async (wr) => {
+            const finalLeft = await leftRes.run(wr);
+            this.state.env['?'] = finalLeft.cls === 'error' ? '1' : '0';
+            if (finalLeft.cls !== 'error') {
+              const rightRes = this.executeAST(node.right, currentDir, history, stdin, wr);
+              if (rightRes.async) {
+                const finalRight = await rightRes.run(wr);
+                this.state.env['?'] = finalRight.cls === 'error' ? '1' : '0';
+                return finalRight;
+              }
+              this.state.env['?'] = rightRes.cls === 'error' ? '1' : '0';
+              return rightRes;
+            }
+            return finalLeft;
+          }
+        };
       }
       
-      return {
-        output: [],
-        cls: 'success',
-        newDir: innerRes.newDir,
-        action: innerRes.action,
-        toast: innerRes.toast || `Output redirected to ${redir.filePart}`
-      };
+      this.state.env['?'] = leftRes.cls === 'error' ? '1' : '0';
+      if (leftRes.cls !== 'error') {
+        const rightRes = this.executeAST(node.right, currentDir, history, stdin, writeRow);
+        if (rightRes.async) {
+          return {
+            async: true,
+            run: async (wr) => {
+              const finalRight = await rightRes.run(wr);
+              this.state.env['?'] = finalRight.cls === 'error' ? '1' : '0';
+              return finalRight;
+            }
+          };
+        }
+        this.state.env['?'] = rightRes.cls === 'error' ? '1' : '0';
+        return rightRes;
+      }
+      return leftRes;
     }
+    
+    if (node.type === 'or') {
+      const leftRes = this.executeAST(node.left, currentDir, history, stdin, writeRow);
+      if (leftRes.async) {
+        return {
+          async: true,
+          run: async (wr) => {
+            const finalLeft = await leftRes.run(wr);
+            this.state.env['?'] = finalLeft.cls === 'error' ? '1' : '0';
+            if (finalLeft.cls === 'error') {
+              const rightRes = this.executeAST(node.right, currentDir, history, stdin, wr);
+              if (rightRes.async) {
+                const finalRight = await rightRes.run(wr);
+                this.state.env['?'] = finalRight.cls === 'error' ? '1' : '0';
+                return finalRight;
+              }
+              this.state.env['?'] = rightRes.cls === 'error' ? '1' : '0';
+              return rightRes;
+            }
+            return finalLeft;
+          }
+        };
+      }
+      
+      this.state.env['?'] = leftRes.cls === 'error' ? '1' : '0';
+      if (leftRes.cls === 'error') {
+        const rightRes = this.executeAST(node.right, currentDir, history, stdin, writeRow);
+        if (rightRes.async) {
+          return {
+            async: true,
+            run: async (wr) => {
+              const finalRight = await rightRes.run(wr);
+              this.state.env['?'] = finalRight.cls === 'error' ? '1' : '0';
+              return finalRight;
+            }
+          };
+        }
+        this.state.env['?'] = rightRes.cls === 'error' ? '1' : '0';
+        return rightRes;
+      }
+      return leftRes;
+    }
+    
+    if (node.type === 'pipeline') {
+      const leftRes = this.executeAST(node.left, currentDir, history, stdin, null);
+      if (leftRes.async) {
+        return {
+          async: true,
+          run: async (wr) => {
+            let captured = [];
+            await leftRes.run((t) => {
+              captured.push(t);
+            });
+            const rightRes = this.executeAST(node.right, currentDir, history, captured.join('\n'), wr);
+            if (rightRes.async) {
+              const finalRight = await rightRes.run(wr);
+              this.state.env['?'] = finalRight.cls === 'error' ? '1' : '0';
+              return finalRight;
+            }
+            this.state.env['?'] = rightRes.cls === 'error' ? '1' : '0';
+            return rightRes;
+          }
+        };
+      }
+      
+      const leftOutput = (leftRes.output || []).join('\n');
+      const rightRes = this.executeAST(node.right, currentDir, history, leftOutput, writeRow);
+      if (rightRes.async) {
+        return {
+          async: true,
+          run: async (wr) => {
+            const finalRight = await rightRes.run(wr);
+            this.state.env['?'] = finalRight.cls === 'error' ? '1' : '0';
+            return finalRight;
+          }
+        };
+      }
+      this.state.env['?'] = rightRes.cls === 'error' ? '1' : '0';
+      return rightRes;
+    }
+    
+    return { output: [], cls: 'success' };
+  }
 
-    const parts = rawCmd.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
-    if (parts.length === 0) return { output: [] };
-    const cmd = parts[0];
-    const args = parts.slice(1).map(a => a.replace(/^"|"$/g, ''));
+  executeSimpleCommand(node, currentDir, history = [], stdin = '', writeRow = null) {
+    const cmd = node.args[0];
+    const args = node.args.slice(1);
+    if (!cmd) return { output: [] };
+    
+    return this.runCoreCommand(cmd, args, currentDir, history, stdin);
+  }
+
+  executeCommand(rawCmd, currentDir, history = [], stdin = '') {
+    const tokens = this.tokenize(rawCmd);
+    if (tokens.length === 0) return { output: [] };
+    const ast = this.parseShell(tokens);
+    const result = this.executeAST(ast, currentDir, history, stdin);
+    if (!result.async) {
+      this.state.env['?'] = result.cls === 'error' ? '1' : '0';
+    }
+    return result;
+  }
+
+  runCoreCommand(cmd, args, currentDir, history = [], stdin = '') {
     const output = [];
     let cls = '';
     let newDir = null;
@@ -1018,13 +1451,15 @@ export class Kernel {
       const user = this.state.users.find(u => u.username === this.state.currentSession.currentUser);
       if (!user || user.role !== 'admin') return { output: ['sudo: permission denied'], cls: 'error' };
       output.push(`[sudo] password accepted for ${this.state.currentSession.currentUser}`);
-      const innerRes = this.executeCommand(parts.slice(1).join(' '), currentDir, history, stdin);
+      const innerRes = this.executeCommand(args.join(' '), currentDir, history, stdin);
       return {
         output: [...output, ...(innerRes.output || [])],
         cls: innerRes.cls,
         newDir: innerRes.newDir,
         action: innerRes.action,
-        toast: innerRes.toast
+        toast: innerRes.toast,
+        async: innerRes.async,
+        run: innerRes.run
       };
     }
 

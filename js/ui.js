@@ -24,6 +24,7 @@ export class UIController {
     this.inactivityTimer = null;
     this.lastActivity = Date.now();
     this.appTimers = {};
+    this.lifecycleHooks = {};
     this.setupTimerInterceptors();
   }
 
@@ -714,10 +715,25 @@ export class UIController {
     });
   }
 
+  registerLifecycleHook(appId, hookName, cb) {
+    if (!this.lifecycleHooks[appId]) this.lifecycleHooks[appId] = {};
+    this.lifecycleHooks[appId][hookName] = cb;
+  }
+
+  triggerLifecycleHook(appId, hookName) {
+    const hook = this.lifecycleHooks[appId]?.[hookName];
+    if (typeof hook === 'function') {
+      try {
+        hook();
+      } catch (err) {
+        console.error(`Error in app "${appId}" lifecycle hook "${hookName}":`, err);
+      }
+    }
+  }
+
   openApp(appId) {
     let proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
     if (!proc) {
-      // Dynamic process state for newly installed App Store apps!
       proc = { open: false, minimized: false, x: 200, y: 150, w: 600, h: 420, zIndex: 25 };
       Reflect.set(this.state.processes, window.sanitizeKey(appId), proc);
     }
@@ -734,6 +750,8 @@ export class UIController {
       return;
     }
 
+    const isResuming = proc.open && proc.minimized;
+
     proc.open = true;
     proc.minimized = false;
     if (proc.workspace === undefined) {
@@ -747,17 +765,20 @@ export class UIController {
     win.style.width = `${proc.w}px`;
     win.style.height = `${proc.h}px`;
 
-    // Spawn process
     const kernel = window.AstraKernel;
-    if (kernel) kernel.spawnProcess(appId, 5); // parent = windowserver
+    if (kernel) kernel.spawnProcess(appId, 5);
 
     this.focusWindow(appId);
 
-    // Initialize app content
-    const content = win.querySelector('.window-body');
-    if (content && Reflect.get(window.AstraApps, window.sanitizeKey(appId))) {
-      window.renderSafeHTML(content, '');
-      Reflect.get(window.AstraApps, window.sanitizeKey(appId))(content, this);
+    if (isResuming) {
+      this.triggerLifecycleHook(appId, 'resume');
+    } else {
+      const content = win.querySelector('.window-body');
+      if (content && Reflect.get(window.AstraApps, window.sanitizeKey(appId))) {
+        window.renderSafeHTML(content, '');
+        Reflect.get(window.AstraApps, window.sanitizeKey(appId))(content, this);
+      }
+      this.triggerLifecycleHook(appId, 'launch');
     }
 
     this.state.saveState();
@@ -766,6 +787,10 @@ export class UIController {
   closeApp(appId) {
     const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
     if (!proc) return;
+    
+    this.triggerLifecycleHook(appId, 'destroy');
+    delete this.lifecycleHooks[appId];
+
     const win = document.querySelector(`.window[data-app="${window.escapeHTML(appId)}"]`);
     if (win) {
       win.classList.add('hidden');
@@ -777,17 +802,14 @@ export class UIController {
     proc.open = false;
     proc.minimized = false;
 
-    // Clear registered app timers
     this.clearAppTimers(appId);
 
-    // Kill process
     const kernel = window.AstraKernel;
     if (kernel) {
       const kp = kernel.listProcesses().find(p => p.name === appId);
       if (kp) kernel.killProcess(kp.pid);
     }
 
-    // Update dock
     document.querySelectorAll('.dock-item').forEach(item => {
       if (item.getAttribute('data-app') === appId) item.classList.remove('active');
     });
@@ -801,6 +823,7 @@ export class UIController {
     const win = document.querySelector(`.window[data-app="${window.escapeHTML(appId)}"]`);
     if (win) win.classList.add('hidden');
     proc.minimized = true;
+    this.triggerLifecycleHook(appId, 'suspend');
     this.state.saveState();
   }
 

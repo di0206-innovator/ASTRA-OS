@@ -841,19 +841,49 @@ export class OSState {
       current = current.children[safePart];
     }
     this.getNodeMetadata(current);
-    const isNew = !current.children[fileName];
-    if (current.children[fileName] && !this.canModifyNode(current.children[fileName])) {
+    const targetFile = current.children[fileName];
+    if (targetFile && !this.canModifyNode(targetFile)) {
       return false;
     }
-    current.children[fileName] = {
-      type: 'file', name: fileName, content,
-      owner: (current.children[fileName] && current.children[fileName].owner) || this.currentSession.currentUser || 'divyanshu',
-      group: 'staff',
-      permissions: (current.children[fileName] && current.children[fileName].permissions) || 'rw-r--r--',
-      createdAt: (current.children[fileName] && current.children[fileName].createdAt) || Date.now(),
-      updatedAt: Date.now(),
-      accessedAt: Date.now()
-    };
+    
+    // Atomic write safeguard via a temporary swap simulation
+    const tempFileKey = `.tmp_${fileName}_${Date.now()}`;
+    try {
+      current.children[tempFileKey] = {
+        type: 'file',
+        name: tempFileKey,
+        content: content,
+        owner: (targetFile && targetFile.owner) || this.currentSession.currentUser || 'divyanshu',
+        group: 'staff',
+        permissions: (targetFile && targetFile.permissions) || 'rw-r--r--',
+        createdAt: (targetFile && targetFile.createdAt) || Date.now(),
+        updatedAt: Date.now(),
+        accessedAt: Date.now(),
+        versionHistory: (targetFile && targetFile.versionHistory) || []
+      };
+      
+      // Store history checkpoint
+      if (targetFile) {
+        current.children[tempFileKey].versionHistory.unshift({
+          content: targetFile.content,
+          updatedAt: targetFile.updatedAt || Date.now()
+        });
+        if (current.children[tempFileKey].versionHistory.length > 5) {
+          current.children[tempFileKey].versionHistory.pop();
+        }
+      }
+      
+      // Atomic commit
+      current.children[tempFileKey].name = fileName;
+      current.children[fileName] = current.children[tempFileKey];
+      delete current.children[tempFileKey];
+    } catch (err) {
+      delete current.children[tempFileKey];
+      console.error("Atomic write failed", err);
+      return false;
+    }
+
+    const isNew = !targetFile;
     const actionText = isNew ? `Created file: ${pathStr}` : `Modified file: ${pathStr}`;
     this.addAuditLog('System', actionText);
     window.AstraBus?.emit('fs.changed', { path: pathStr, action: actionText });
