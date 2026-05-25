@@ -90,22 +90,85 @@ function bootOS() {
   // 2. Open Pre-configured Windows on Startup
   // ==========================================
   
-  // Start with Lock Screen as the boot sequence
-  ui.lockScreen();
+  // Start with Boot Screen sequence
+  const bootScreen = document.getElementById('boot-screen');
+  const bootConsole = document.getElementById('boot-console');
+  const bootProgress = document.getElementById('boot-progress');
 
-  // Re-open apps that were active before refresh
-  let openedAny = false;
-  Object.keys(state.processes).forEach(appId => {
-    if (Reflect.get(state.processes, window.sanitizeKey(appId)).open) {
-      ui.openApp(appId);
-      openedAny = true;
+  const bootLogs = [
+    { text: "Initializing Virtual File System (VFS)...", type: "info" },
+    { text: "Mounting /dev/sda1 on / (ext4)...", type: "success" },
+    { text: "Mounting /dev/sda2 on /boot (ext4)...", type: "success" },
+    { text: "Initializing process table daemon (PID 1)...", type: "info" },
+    { text: "Spawning kernel service manager...", type: "info" },
+    { text: "Loading security policies and manifests...", type: "success" },
+    { text: "Registering system call mappings (fs, proc, settings)...", type: "info" },
+    { text: "Initializing Event Bus & runtime interfaces...", type: "success" },
+    { text: "Connecting to safety verification agent (PID 102)...", type: "success" },
+    { text: "Establishing secure system-wide clipboard bridge...", type: "info" },
+    { text: "Boot sequence completed. Loading UI...", type: "success" }
+  ];
+
+  let logIndex = 0;
+  const isTestMode = navigator.webdriver || window.location.search.includes('test');
+  const delayTime = isTestMode ? 10 : 150;
+
+  function printNextLog() {
+    if (logIndex < bootLogs.length) {
+      const log = Reflect.get(bootLogs, logIndex);
+      const line = document.createElement('div');
+      line.className = `boot-console-line ${log.type}`;
+      line.textContent = `[  OK  ] ${log.text}`;
+      if (bootConsole) {
+        bootConsole.appendChild(line);
+        bootConsole.scrollTop = bootConsole.scrollHeight;
+      }
+
+      // Update progress bar
+      const pct = Math.min(((logIndex + 1) / bootLogs.length) * 100, 100);
+      if (bootProgress) bootProgress.style.width = `${pct}%`;
+
+      logIndex++;
+      setTimeout(printNextLog, isTestMode ? delayTime : (delayTime + Math.random() * 100));
+    } else {
+      // Fade out boot screen, lock screen appears
+      setTimeout(() => {
+        if (bootScreen) bootScreen.classList.add('hidden');
+        ui.lockScreen();
+
+        // Re-open apps that were active before refresh
+        let openedAny = false;
+        Object.keys(state.processes).forEach(appId => {
+          if (Reflect.get(state.processes, window.sanitizeKey(appId)).open) {
+            ui.openApp(appId);
+            openedAny = true;
+          }
+        });
+
+        // Default welcome setup if first time
+        if (!openedAny) {
+          ui.openApp('editor');
+          ui.openApp('tasks');
+        }
+      }, isTestMode ? 20 : 350);
     }
-  });
+  }
 
-  // Default welcome setup if first time
-  if (!openedAny) {
-    ui.openApp('editor');
-    ui.openApp('tasks');
+  if (bootScreen && bootConsole) {
+    printNextLog();
+  } else {
+    ui.lockScreen();
+    let openedAny = false;
+    Object.keys(state.processes).forEach(appId => {
+      if (Reflect.get(state.processes, window.sanitizeKey(appId)).open) {
+        ui.openApp(appId);
+        openedAny = true;
+      }
+    });
+    if (!openedAny) {
+      ui.openApp('editor');
+      ui.openApp('tasks');
+    }
   }
 
   state.runIntegrityChecks();

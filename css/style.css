@@ -4219,4 +4219,122 @@ dialog::backdrop {
   border-color: var(--border-glass-focus) !important;
 }
 
+/* Boot Screen Overlay */
+.boot-screen-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #050508;
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  color: #fff;
+  font-family: var(--font-sans);
+}
 
+.boot-screen-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.boot-screen-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  width: 480px;
+}
+
+.boot-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.boot-logo-icon {
+  font-size: 48px;
+  animation: float 3s ease-in-out infinite;
+}
+
+.boot-logo-text {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 6px;
+  background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin: 0;
+}
+
+.boot-version {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  letter-spacing: 1px;
+}
+
+.boot-console {
+  width: 100%;
+  height: 180px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-y: auto;
+  color: #a7f3d0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.8);
+}
+
+.boot-console::-webkit-scrollbar {
+  width: 4px;
+}
+.boot-console::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.boot-console-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.boot-console-line.success {
+  color: #34d399;
+}
+.boot-console-line.info {
+  color: #60a5fa;
+}
+
+.boot-progress-container {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.boot-progress-bar {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #a855f7 0%, #6366f1 100%);
+  border-radius: 2px;
+  transition: width 0.1s linear;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
