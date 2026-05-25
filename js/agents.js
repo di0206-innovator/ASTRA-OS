@@ -244,11 +244,13 @@ app.post('/api/v1/council', (req, res) => {
           } else {
             replacedCode = originalCode + '\n// Astra Agent modification\n';
           }
-          
-          const approved = await this.checkSafetyPolicy('write_file', task.path, details);
-          
-          if (!approved) {
-            this.logAgent('SafetyLayer', 'Permission denied by user. Halting execution loop.', 'alert');
+
+          this.backupFileBeforeChange(task.path);
+
+          try {
+            await window.Astra.syscall('fs:write', task.path, replacedCode);
+          } catch (err) {
+            this.logAgent('SafetyLayer', 'Permission denied. Halting execution loop.', 'alert');
             this.state.updateWorkflow(workflow.id, { status: 'blocked' });
             this.ui.showToast('Orchestration Halted', 'Safety layer denied modification permissions.', 'error');
             this.state.appendWorkflowStep(workflow.id, {
@@ -282,8 +284,6 @@ app.post('/api/v1/council', (req, res) => {
             }
           }
           
-          this.backupFileBeforeChange(task.path);
-          this.state.writeFile(task.path, replacedCode);
           this.ui.showToast('Task Completed', `${task.assigned} modified ${task.path.split('/').pop()}.`, 'success');
           
           this.state.appendWorkflowStep(workflow.id, {
@@ -888,33 +888,23 @@ app.post('/api/v1/council', (req, res) => {
       }
 
       case 'write_file': {
-        // Check safety policy
-        const approved = await this.checkSafetyPolicy(
-          'write_file',
-          args.path,
-          args.content.length > 250 ? args.content.substring(0, 250) + '...' : args.content
-        );
-
-        if (!approved) {
-          return { error: 'Permission denied by safety policy' };
-        }
-
         this.backupFileBeforeChange(args.path);
-        this.state.writeFile(args.path, args.content);
-        
-        // Auto update active editor text area if it matches the edited file path
-        const editorTextarea = document.getElementById('editor-content');
-        if (editorTextarea) {
-          const activeFile = document.querySelector('.editor-tab.active span')?.textContent;
-          if (activeFile && args.path.endsWith(activeFile)) {
-            editorTextarea.value = args.content;
+        try {
+          await window.Astra.syscall('fs:write', args.path, args.content);
+          
+          // Auto update active editor text area if it matches the edited file path
+          const editorTextarea = document.getElementById('editor-content');
+          if (editorTextarea) {
+            const activeFile = document.querySelector('.editor-tab.active span')?.textContent;
+            if (activeFile && args.path.endsWith(activeFile)) {
+              editorTextarea.value = args.content;
+            }
           }
+          if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+          return { success: true };
+        } catch (err) {
+          return { error: err.message };
         }
-
-        // Refresh Explorer if visible
-        if (window.refreshExplorerGrid) window.refreshExplorerGrid();
-        
-        return { success: true };
       }
 
       case 'list_dir': {
@@ -929,28 +919,24 @@ app.post('/api/v1/council', (req, res) => {
       }
 
       case 'run_terminal_command': {
-        // Check safety policy
-        const approved = await this.checkSafetyPolicy(
-          'run_command',
-          args.command.split(' ')[0],
-          `Execute command inside terminal: ${args.command}`
-        );
-
-        if (!approved) {
-          return { error: 'Permission denied by safety policy' };
+        try {
+          // Gate through spawn syscall
+          await window.Astra.syscall('proc:spawn', args.command.split(' ')[0], 1);
+          
+          if (window.printTerminalRow) {
+            window.printTerminalRow(`divyanshu@astra:~$ ${args.command}`);
+          }
+          
+          const output = await this.executeVirtualCommand(args.command);
+          
+          if (window.printTerminalRow && output) {
+            output.split('\n').forEach(line => window.printTerminalRow(line));
+          }
+          
+          return { output };
+        } catch (err) {
+          return { error: err.message };
         }
-
-        if (window.printTerminalRow) {
-          window.printTerminalRow(`divyanshu@astra:~$ ${args.command}`);
-        }
-        
-        const output = await this.executeVirtualCommand(args.command);
-        
-        if (window.printTerminalRow && output) {
-          output.split('\n').forEach(line => window.printTerminalRow(line));
-        }
-        
-        return { output };
       }
 
       case 'add_task': {

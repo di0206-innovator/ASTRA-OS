@@ -78,30 +78,82 @@ window.AstraApps.sysmonitor = function(container, ui) {
   function renderProcesses(el) {
     const kernel = window.AstraKernel;
     if (!kernel) return;
-    const procs = kernel.listProcesses();
+    const procs = kernel.listProcesses() || [];
+    
+    // Build tree
+    const procMap = new Map();
+    procs.forEach(p => {
+      procMap.set(p.pid, { ...p, children: [] });
+    });
+    
+    const roots = [];
+    procMap.forEach(p => {
+      if (p.parentPid && procMap.has(p.parentPid)) {
+        procMap.get(p.parentPid).children.push(p);
+      } else {
+        roots.push(p);
+      }
+    });
+
+    // Helper to generate tree rows recursively
+    function generateTreeHTML(node, depth = 0) {
+      const indent = '&nbsp;&nbsp;&nbsp;&nbsp;'.repeat(depth);
+      const prefix = depth > 0 ? '└─ ' : '';
+      const nameHTML = `${indent}${prefix}<strong>${window.escapeHTML(node.name)}</strong>`;
+      
+      const btn = node.pid > 8 ? `<button class="btn-kill" data-pid="${node.pid}" title="Kill Process" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 10px;">✕ Kill</button>` : '';
+      
+      let rows = `
+        <tr>
+          <td class="font-mono">${node.pid}</td>
+          <td>${nameHTML}</td>
+          <td><span class="proc-state proc-${node.state.toLowerCase()}">${node.state}</span></td>
+          <td class="font-mono">${node.cpuPercent}%</td>
+          <td class="font-mono">${node.memMB} MB</td>
+          <td>${btn}</td>
+        </tr>
+      `;
+      
+      // Sort children by PID
+      node.children.sort((a, b) => a.pid - b.pid);
+      node.children.forEach(child => {
+        rows += generateTreeHTML(child, depth + 1);
+      });
+      
+      return rows;
+    }
+
+    // Generate trees starting from root nodes
+    const treeHTML = roots.map(r => generateTreeHTML(r, 0)).join('');
+    
     window.renderSafeHTML(el, `
       <table class="process-table">
-        <thead><tr><th>PID</th><th>Name</th><th>State</th><th>CPU%</th><th>MEM(MB)</th><th></th></tr></thead>
-        <tbody>${procs.map(p => {
-          const btn = p.pid > 8 ? '<button class="btn-kill" data-pid="' + p.pid + '" title="Kill Process">✕</button>' : '';
-          return `
+        <thead>
           <tr>
-            <td class="font-mono">${p.pid}</td>
-            <td>${window.escapeHTML(p.name)}</td>
-            <td><span class="proc-state proc-${p.state.toLowerCase()}">${p.state}</span></td>
-            <td class="font-mono">${p.cpuPercent}</td>
-            <td class="font-mono">${p.memMB}</td>
-            <td>${btn}</td>
+            <th>PID</th>
+            <th>Process Name Tree</th>
+            <th>State</th>
+            <th>CPU%</th>
+            <th>MEM</th>
+            <th></th>
           </tr>
-          `;
-        }).join('')}</tbody>
+        </thead>
+        <tbody>
+          ${treeHTML || '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No active processes found.</td></tr>'}
+        </tbody>
       </table>
     `);
+
     el.querySelectorAll('.btn-kill').forEach(btn => {
       btn.addEventListener('click', () => {
         const pid = btn.getAttribute('data-pid');
         const result = kernel.killProcess(pid);
-        if (result.success) ui.showToast('Process Killed', window.escapeHTML(result.name) + ' (PID ' + pid + ') terminated.', 'info');
+        if (result.success) {
+          ui.showToast('Process Killed', window.escapeHTML(result.name) + ' (PID ' + pid + ') terminated.', 'info');
+          renderContent();
+        } else {
+          ui.showToast('Kill Failed', result.error, 'error');
+        }
       });
     });
   }

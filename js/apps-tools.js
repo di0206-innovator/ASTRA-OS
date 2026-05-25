@@ -623,6 +623,31 @@ window.AstraApps.dailybriefing = function(container, ui) {
 // 5. Trust & Safety Dashboard App
 // ==========================================
 window.AstraApps.trust = function(container, ui) {
+  let activeTab = 'policies';
+  let searchQuery = '';
+  let filterType = 'all';
+  let filterLevel = 'all';
+
+  // Listen to Bus events to automatically update the dashboard
+  const unsubApprovals = window.AstraBus?.on('approvals.changed', () => {
+    render();
+  });
+  const unsubFs = window.AstraBus?.on('fs.changed', () => {
+    if (activeTab === 'rollback') render();
+  });
+  const unsubFsDel = window.AstraBus?.on('fs.deleted', () => {
+    if (activeTab === 'rollback') render();
+  });
+
+  const checkInterval = setInterval(() => {
+    if (!document.body.contains(container)) {
+      clearInterval(checkInterval);
+      unsubApprovals?.();
+      unsubFs?.();
+      unsubFsDel?.();
+    }
+  }, 1000);
+
   function render() {
     const state = ui.state;
     const safety = state.registry.safety || {
@@ -637,45 +662,211 @@ window.AstraApps.trust = function(container, ui) {
     const systemRisk = "LOW";
     const safetyAgentVerdict = "Astra is operating within authorized security boundaries.";
     
-    const auditLogs = state.auditLogs || [];
-    let auditRowsHTML = '';
-    if (auditLogs.length === 0) {
-      auditRowsHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No audit logs recorded yet.</td></tr>';
-    } else {
-      auditLogs.slice(-6).reverse().forEach(log => {
-        const isDangerous = log.action.includes('error') || log.action.includes('fail') || log.action.includes('denied');
-        const badgeClass = isDangerous ? 'warned' : 'verified';
-        const badgeText = isDangerous ? '⚠️ Warning' : '🛡️ Verified';
-        
-        auditRowsHTML += `
-          <tr>
-            <td style="font-family: var(--font-mono); font-size: 11px;">${log.timestamp}</td>
-            <td><strong>${window.escapeHTML(log.agent)}</strong></td>
-            <td>${window.escapeHTML(log.action)}</td>
-            <td><span class="trust-status-badge ${badgeClass}">${badgeText}</span></td>
-          </tr>
-        `;
-      });
-    }
-
-    let rollbackRowsHTML = '';
-    const orchestrator = ui.orchestrator;
-    const snapshots = orchestrator ? orchestrator.vfsSnapshots : {};
-    const modifiedPaths = Object.keys(snapshots || {});
-
-    if (modifiedPaths.length === 0) {
-      rollbackRowsHTML = '<div class="dailybriefing-empty">No files modified in the current session.</div>';
-    } else {
-      modifiedPaths.forEach(path => {
-        rollbackRowsHTML += `
-          <div class="db-file-item">
-            <span style="font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow:1; max-width: 180px;">${window.escapeHTML(path)}</span>
-            <button class="btn btn-secondary btn-sm trust-rollback-btn" data-path="${window.escapeHTML(path)}" style="border-color: var(--color-amber); color: var(--color-amber); background: rgba(245,158,11,0.05); padding: 2px 6px; font-size: 11px;">
-              ↩ Rollback
-            </button>
+    const pendingCount = state.approvalsQueue ? state.approvalsQueue.length : 0;
+    
+    let activeTabContent = '';
+    
+    if (activeTab === 'policies') {
+      activeTabContent = `
+        <div class="trust-grid">
+          <div class="trust-panel">
+            <h4>Agent Autonomy Policies</h4>
+            <div class="trust-policy-row">
+              <span class="trust-policy-label">File Modification (Write)</span>
+              <select class="trust-policy-select" id="policy-write">
+                <option value="ask" ${safety.writePolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
+                <option value="approve" ${safety.writePolicy === 'approve' ? 'selected' : ''}>Auto-Approve Bounded</option>
+                <option value="deny" ${safety.writePolicy === 'deny' ? 'selected' : ''}>Deny Autonomous Edit</option>
+              </select>
+            </div>
+            <div class="trust-policy-row">
+              <span class="trust-policy-label">Terminal Execution (Command)</span>
+              <select class="trust-policy-select" id="policy-command">
+                <option value="ask" ${safety.commandPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
+                <option value="approve" ${safety.commandPolicy === 'approve' ? 'selected' : ''}>Auto-Approve Safe</option>
+                <option value="deny" ${safety.commandPolicy === 'deny' ? 'selected' : ''}>Deny Commands</option>
+              </select>
+            </div>
+            <div class="trust-policy-row">
+              <span class="trust-policy-label">Network Access</span>
+              <select class="trust-policy-select" id="policy-network">
+                <option value="ask" ${safety.networkPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
+                <option value="approve" ${safety.networkPolicy === 'approve' ? 'selected' : ''}>Allow Secure Only</option>
+                <option value="deny" ${safety.networkPolicy === 'deny' ? 'selected' : ''}>Block Internet</option>
+              </select>
+            </div>
+            <div class="trust-policy-row">
+              <span class="trust-policy-label">Modify System Settings</span>
+              <select class="trust-policy-select" id="policy-settings">
+                <option value="ask" ${safety.settingsPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
+                <option value="approve" ${safety.settingsPolicy === 'approve' ? 'selected' : ''}>Auto-Approve Non-Core</option>
+                <option value="deny" ${safety.settingsPolicy === 'deny' ? 'selected' : ''}>Block All Changes</option>
+              </select>
+            </div>
           </div>
-        `;
+
+          <div class="trust-panel">
+            <h4>Safety Agent Context</h4>
+            <p style="font-size: 13px; margin: 2px 0;">Risk Level Assessment: <strong style="color: var(--color-green);">${systemRisk}</strong></p>
+            
+            <div class="trust-slider-container">
+              <div class="trust-slider-label">
+                <span>Confidence Threshold Escalation</span>
+                <span id="threshold-val"><strong>${safety.confidenceThreshold}%</strong></span>
+              </div>
+              <input type="range" class="trust-slider" id="threshold-slider" min="50" max="100" value="${safety.confidenceThreshold}">
+            </div>
+            
+            <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-top: 4px;">
+              <em>Verdict: ${safetyAgentVerdict}</em>
+              <br>
+              Confidence score below <strong>${safety.confidenceThreshold}%</strong> forces uncertainty escalation and prompts the user for approval.
+            </p>
+          </div>
+        </div>
+      `;
+    } else if (activeTab === 'approvals') {
+      const queue = state.approvalsQueue || [];
+      let approvalsListHTML = '';
+      if (queue.length === 0) {
+        approvalsListHTML = '<div class="dailybriefing-empty">🛡️ No pending approvals required.</div>';
+      } else {
+        queue.forEach(appr => {
+          const isDestructive = appr.callName.includes('delete') || appr.callName.includes('kill');
+          const panelStyle = isDestructive ? 'border-color: var(--color-red); background: rgba(239,68,68,0.02);' : '';
+          approvalsListHTML += `
+            <div class="db-file-item" style="flex-direction: column; align-items: stretch; gap: 8px; margin-bottom: 8px; background: var(--bg-glass-light); border: 1px solid var(--border-glass); ${panelStyle}">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span><strong>${window.escapeHTML(appr.callerId)}</strong> requested <code>${window.escapeHTML(appr.callName)}</code></span>
+                <span style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">${new Date(appr.timestamp).toLocaleTimeString()}</span>
+              </div>
+              <div style="font-size: 12px; color: var(--text-secondary);">Target: <code>${window.escapeHTML(String(appr.args[0]))}</code></div>
+              ${appr.callName === 'fs:write' && appr.args[1] ? `<pre style="font-family: var(--font-mono); font-size:11px; background: rgba(0,0,0,0.25); padding: 8px; border-radius:4px; max-height:100px; overflow-y:auto; margin:4px 0; border: 1px solid rgba(255,255,255,0.05); color: #a5f3fc;">${window.escapeHTML(appr.args[1].slice(0, 300))}${appr.args[1].length > 300 ? '\n...' : ''}</pre>` : ''}
+              <div style="display: flex; gap: 8px; margin-top: 4px;">
+                <button class="btn btn-sm btn-approve" data-id="${appr.id}" style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">✓ Approve</button>
+                <button class="btn btn-sm btn-deny" data-id="${appr.id}" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">✕ Deny</button>
+              </div>
+            </div>
+          `;
+        });
+      }
+      activeTabContent = `
+        <div class="trust-panel">
+          <h4>Pending Approvals Inbox</h4>
+          <div style="display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; padding-right: 4px;">
+            ${approvalsListHTML}
+          </div>
+        </div>
+      `;
+    } else if (activeTab === 'rollback') {
+      let rollbackRowsHTML = '';
+      const orchestrator = ui.orchestrator;
+      const snapshots = orchestrator ? orchestrator.vfsSnapshots : {};
+      const modifiedPaths = Object.keys(snapshots || {});
+
+      if (modifiedPaths.length === 0) {
+        rollbackRowsHTML = '<div class="dailybriefing-empty">No files modified in the current session.</div>';
+      } else {
+        modifiedPaths.forEach(path => {
+          rollbackRowsHTML += `
+            <div class="db-file-item">
+              <span style="font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow:1; max-width: 180px;">${window.escapeHTML(path)}</span>
+              <button class="btn btn-secondary btn-sm trust-rollback-btn" data-path="${window.escapeHTML(path)}" style="border-color: var(--color-amber); color: var(--color-amber); background: rgba(245,158,11,0.05); padding: 2px 6px; font-size: 11px;">
+                ↩ Rollback
+              </button>
+            </div>
+          `;
+        });
+      }
+      activeTabContent = `
+        <div class="trust-panel">
+          <h4>Active File Rollback Center</h4>
+          <div class="dailybriefing-tasks-list" style="max-height: 250px; overflow-y: auto;">
+            ${rollbackRowsHTML}
+          </div>
+        </div>
+      `;
+    } else if (activeTab === 'journal') {
+      const logs = state.eventLog || [];
+      const filteredLogs = logs.filter(log => {
+        const matchesQuery = !searchQuery || JSON.stringify(log).toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesType = filterType === 'all' || log.type.startsWith(filterType);
+        const matchesLevel = filterLevel === 'all' || log.level === filterLevel;
+        return matchesQuery && matchesType && matchesLevel;
       });
+
+      let journalRowsHTML = '';
+      if (filteredLogs.length === 0) {
+        journalRowsHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">No matching log events.</td></tr>';
+      } else {
+        filteredLogs.slice(-50).reverse().forEach(log => {
+          const isWarning = log.level === 'WARN' || log.type.includes('fail') || log.type.includes('denied');
+          const isError = log.level === 'ERROR';
+          const rowStyle = isError ? 'color: var(--color-red);' : (isWarning ? 'color: var(--color-amber);' : '');
+          
+          let detailStr = '';
+          if (log.detail) {
+            if (typeof log.detail === 'string') {
+              detailStr = log.detail;
+            } else {
+              detailStr = JSON.stringify(log.detail);
+              if (detailStr.length > 80) detailStr = detailStr.slice(0, 80) + '...';
+            }
+          }
+          
+          journalRowsHTML += `
+            <tr style="${rowStyle}">
+              <td style="font-family: var(--font-mono); font-size: 11px; white-space: nowrap;">${new Date(log.timestamp).toLocaleTimeString()}</td>
+              <td><strong>${window.escapeHTML(log.source)}</strong></td>
+              <td><span style="font-family: var(--font-mono); font-size:11px;">${window.escapeHTML(log.type)}</span></td>
+              <td><span style="font-weight:bold; font-size:10px;">${window.escapeHTML(log.level || 'INFO')}</span></td>
+              <td style="font-size:11.5px; overflow:hidden; text-overflow:ellipsis; max-width: 250px;" title="${window.escapeHTML(JSON.stringify(log.detail))}">
+                ${window.escapeHTML(detailStr)}
+              </td>
+            </tr>
+          `;
+        });
+      }
+
+      activeTabContent = `
+        <div class="trust-panel" style="overflow-x: auto;">
+          <h4>System Journal Auditor</h4>
+          <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+            <input type="text" class="explorer-search" id="journal-search" placeholder="Search logs..." style="width: 180px; margin-left: 0;" value="${window.escapeHTML(searchQuery)}">
+            <select class="trust-policy-select" id="journal-filter-type">
+              <option value="all" ${filterType === 'all' ? 'selected' : ''}>All Subsystems</option>
+              <option value="kernel" ${filterType === 'kernel' ? 'selected' : ''}>Kernel</option>
+              <option value="security" ${filterType === 'security' ? 'selected' : ''}>Security</option>
+              <option value="fs" ${filterType === 'fs' ? 'selected' : ''}>Filesystem</option>
+              <option value="workflow" ${filterType === 'workflow' ? 'selected' : ''}>Workflow</option>
+              <option value="agent" ${filterType === 'agent' ? 'selected' : ''}>Agent</option>
+            </select>
+            <select class="trust-policy-select" id="journal-filter-level">
+              <option value="all" ${filterLevel === 'all' ? 'selected' : ''}>All Levels</option>
+              <option value="INFO" ${filterLevel === 'INFO' ? 'selected' : ''}>INFO</option>
+              <option value="WARN" ${filterLevel === 'WARN' ? 'selected' : ''}>WARNING</option>
+              <option value="ERROR" ${filterLevel === 'ERROR' ? 'selected' : ''}>ERROR</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" id="journal-clear-btn" style="padding: 4px 8px; font-size: 11px;">Clear Search</button>
+          </div>
+          <div style="max-height: 250px; overflow-y: auto;">
+            <table class="trust-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Source</th>
+                  <th>Type</th>
+                  <th>Level</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${journalRowsHTML}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
     }
 
     window.renderSafeHTML(container, `
@@ -684,149 +875,200 @@ window.AstraApps.trust = function(container, ui) {
           <h3>🛡️ Trust & Safety Dashboard</h3>
           <span style="font-size: 11.5px; color: var(--text-secondary);">Security Context: <strong>${safetyLevel}</strong></span>
         </div>
+
+        <div class="trust-tabs" style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border-glass); padding-bottom: 8px;">
+          <button class="btn trust-tab ${activeTab === 'policies' ? 'active' : ''}" data-tab="policies" style="background: ${activeTab === 'policies' ? 'var(--bg-glass-light)' : 'transparent'}; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 12px; border-radius: 4px; font-size: 12px;">Autonomy Policies</button>
+          <button class="btn trust-tab ${activeTab === 'approvals' ? 'active' : ''}" data-tab="approvals" style="background: ${activeTab === 'approvals' ? 'var(--bg-glass-light)' : 'transparent'}; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 12px; border-radius: 4px; font-size: 12px;">
+            Approvals Inbox <span id="trust-pending-badge" style="background: var(--color-amber); color: #000; font-size: 10px; font-weight: bold; border-radius: 10px; padding: 1px 6px; margin-left: 4px; display: ${pendingCount > 0 ? 'inline-block' : 'none'};">${pendingCount}</span>
+          </button>
+          <button class="btn trust-tab ${activeTab === 'rollback' ? 'active' : ''}" data-tab="rollback" style="background: ${activeTab === 'rollback' ? 'var(--bg-glass-light)' : 'transparent'}; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 12px; border-radius: 4px; font-size: 12px;">File Rollback</button>
+          <button class="btn trust-tab ${activeTab === 'journal' ? 'active' : ''}" data-tab="journal" style="background: ${activeTab === 'journal' ? 'var(--bg-glass-light)' : 'transparent'}; border: none; color: var(--text-primary); cursor: pointer; padding: 6px 12px; border-radius: 4px; font-size: 12px;">System Journal</button>
+        </div>
         
         <div class="trust-content">
-          <div class="trust-grid">
-            <div class="trust-panel">
-              <h4>Agent Autonomy Policies</h4>
-              <div class="trust-policy-row">
-                <span class="trust-policy-label">File Modification (Write)</span>
-                <select class="trust-policy-select" id="policy-write">
-                  <option value="ask" ${safety.writePolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
-                  <option value="approve" ${safety.writePolicy === 'approve' ? 'selected' : ''}>Auto-Approve Bounded</option>
-                  <option value="deny" ${safety.writePolicy === 'deny' ? 'selected' : ''}>Deny Autonomous Edit</option>
-                </select>
-              </div>
-              <div class="trust-policy-row">
-                <span class="trust-policy-label">Terminal Execution (Command)</span>
-                <select class="trust-policy-select" id="policy-command">
-                  <option value="ask" ${safety.commandPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
-                  <option value="approve" ${safety.commandPolicy === 'approve' ? 'selected' : ''}>Auto-Approve Safe</option>
-                  <option value="deny" ${safety.commandPolicy === 'deny' ? 'selected' : ''}>Deny Commands</option>
-                </select>
-              </div>
-              <div class="trust-policy-row">
-                <span class="trust-policy-label">Network Access</span>
-                <select class="trust-policy-select" id="policy-network">
-                  <option value="ask" ${safety.networkPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
-                  <option value="approve" ${safety.networkPolicy === 'approve' ? 'selected' : ''}>Allow Secure Only</option>
-                  <option value="deny" ${safety.networkPolicy === 'deny' ? 'selected' : ''}>Block Internet</option>
-                </select>
-              </div>
-              <div class="trust-policy-row">
-                <span class="trust-policy-label">Modify System Settings</span>
-                <select class="trust-policy-select" id="policy-settings">
-                  <option value="ask" ${safety.settingsPolicy === 'ask' ? 'selected' : ''}>Always Ask Approval</option>
-                  <option value="approve" ${safety.settingsPolicy === 'approve' ? 'selected' : ''}>Auto-Approve Non-Core</option>
-                  <option value="deny" ${safety.settingsPolicy === 'deny' ? 'selected' : ''}>Block All Changes</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="trust-panel">
-              <h4>Safety Agent Context</h4>
-              <p style="font-size: 13px; margin: 2px 0;">Risk Level Assessment: <strong style="color: var(--color-green);">${systemRisk}</strong></p>
-              
-              <div class="trust-slider-container">
-                <div class="trust-slider-label">
-                  <span>Confidence Threshold Escalation</span>
-                  <span id="threshold-val"><strong>${safety.confidenceThreshold}%</strong></span>
-                </div>
-                <input type="range" class="trust-slider" id="threshold-slider" min="50" max="100" value="${safety.confidenceThreshold}">
-              </div>
-              
-              <p style="font-size: 12px; color: var(--text-muted); line-height: 1.4; margin-top: 4px;">
-                <em>Verdict: ${safetyAgentVerdict}</em>
-                <br>
-                Confidence score below <strong>${safety.confidenceThreshold}%</strong> forces uncertainty escalation and prompts the user for approval.
-              </p>
-            </div>
-          </div>
-
-          <div class="trust-grid" style="grid-template-columns: 1fr 1.2fr;">
-            <div class="trust-panel">
-              <h4>Active File Rollback Center</h4>
-              <div class="dailybriefing-tasks-list" style="max-height: 160px; overflow-y: auto;">
-                ${rollbackRowsHTML}
-              </div>
-            </div>
-
-            <div class="trust-panel" style="overflow-x: auto;">
-              <h4>Safety Audit Trail</h4>
-              <table class="trust-table">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Agent</th>
-                    <th>Action</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${auditRowsHTML}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          ${activeTabContent}
         </div>
       </div>
     `);
 
-    container.querySelectorAll('.trust-policy-select').forEach(select => {
-      select.addEventListener('change', () => {
-        const policyKey = select.id.replace('policy-', '') + 'Policy';
-        if (!state.registry.safety) state.registry.safety = {};
-        state.registry.safety[policyKey] = select.value;
-        state.saveState();
-        ui.showToast('Policy Updated', `Set ${select.id.replace('policy-', '')} access to ${select.value}.`, 'success');
+    // Tab Navigation Wireup
+    container.querySelectorAll('.trust-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        activeTab = tab.getAttribute('data-tab');
+        render();
       });
     });
 
-    const slider = container.querySelector('#threshold-slider');
-    if (slider) {
-      slider.addEventListener('input', (e) => {
-        container.querySelector('#threshold-val strong').textContent = `${e.target.value}%`;
+    // Policies Tab Event Handlers
+    if (activeTab === 'policies') {
+      container.querySelectorAll('.trust-policy-select').forEach(select => {
+        select.addEventListener('change', () => {
+          const policyKey = select.id.replace('policy-', '') + 'Policy';
+          if (!state.registry.safety) state.registry.safety = {};
+          state.registry.safety[policyKey] = select.value;
+          state.saveState();
+          ui.showToast('Policy Updated', `Set ${select.id.replace('policy-', '')} access to ${select.value}.`, 'success');
+        });
       });
-      slider.addEventListener('change', (e) => {
-        if (!state.registry.safety) state.registry.safety = {};
-        state.registry.safety.confidenceThreshold = parseInt(e.target.value);
-        state.saveState();
-        ui.showToast('Escalation Slider', `Confidence threshold updated to ${e.target.value}%.`, 'info');
+
+      const slider = container.querySelector('#threshold-slider');
+      if (slider) {
+        slider.addEventListener('input', (e) => {
+          container.querySelector('#threshold-val strong').textContent = `${e.target.value}%`;
+        });
+        slider.addEventListener('change', (e) => {
+          if (!state.registry.safety) state.registry.safety = {};
+          state.registry.safety.confidenceThreshold = parseInt(e.target.value);
+          state.saveState();
+          ui.showToast('Escalation Slider', `Confidence threshold updated to ${e.target.value}%.`, 'info');
+        });
+      }
+    }
+
+    // Approvals Tab Event Handlers
+    if (activeTab === 'approvals') {
+      container.querySelectorAll('.btn-approve').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-id');
+          state.resolveApprovalRequest(id, 'approved');
+          ui.showToast('Action Approved', 'The pending syscall was approved and executed.', 'success');
+          render();
+        });
+      });
+
+      container.querySelectorAll('.btn-deny').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-id');
+          state.resolveApprovalRequest(id, 'denied');
+          ui.showToast('Action Denied', 'The pending syscall was denied.', 'error');
+          render();
+        });
       });
     }
 
-    container.querySelectorAll('.trust-rollback-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const path = btn.getAttribute('data-path');
-        if (orchestrator && snapshots[path] !== undefined) {
-          const original = snapshots[path];
-          if (original === null) {
-            state.deleteFile(path);
-          } else {
-            state.writeFile(path, original);
-          }
-          delete snapshots[path];
-          
-          const textarea = document.getElementById('editor-text-area');
-          const activeFile = document.getElementById('context-file')?.textContent;
-          if (activeFile && path.endsWith(activeFile) && textarea) {
-            textarea.value = original || '';
-          }
-          const editorContent = document.getElementById('editor-content');
-          if (editorContent) {
-            const tabActive = document.querySelector('.editor-tab.active span')?.textContent;
-            if (tabActive && path.endsWith(tabActive)) {
-              editorContent.value = original || '';
+    // Rollback Tab Event Handlers
+    if (activeTab === 'rollback') {
+      container.querySelectorAll('.trust-rollback-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const path = btn.getAttribute('data-path');
+          const orchestrator = ui.orchestrator;
+          const snapshots = orchestrator ? orchestrator.vfsSnapshots : {};
+          if (orchestrator && snapshots[path] !== undefined) {
+            const original = snapshots[path];
+            if (original === null) {
+              state.deleteFile(path);
+            } else {
+              state.writeFile(path, original);
             }
-          }
+            delete snapshots[path];
+            
+            const textarea = document.getElementById('editor-text-area');
+            const activeFile = document.getElementById('context-file')?.textContent;
+            if (activeFile && path.endsWith(activeFile) && textarea) {
+              textarea.value = original || '';
+            }
+            const editorContent = document.getElementById('editor-content');
+            if (editorContent) {
+              const tabActive = document.querySelector('.editor-tab.active span')?.textContent;
+              if (tabActive && path.endsWith(tabActive)) {
+                editorContent.value = original || '';
+              }
+            }
 
-          ui.showToast('File Rolled Back', `Reverted modifications in ${path.split('/').pop()}`, 'success');
-          state.addNotification('success', 'Security Rollback', `Rolled back changes in ${path}`);
-          render();
-          if (window.refreshExplorerGrid) window.refreshExplorerGrid();
-        }
+            ui.showToast('File Rolled Back', `Reverted modifications in ${path.split('/').pop()}`, 'success');
+            state.addNotification('success', 'Security Rollback', `Rolled back changes in ${path}`);
+            render();
+            if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+          }
+        });
       });
+    }
+
+    // Journal Tab Event Handlers
+    if (activeTab === 'journal') {
+      const searchInput = container.querySelector('#journal-search');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          searchQuery = e.target.value;
+          // Re-render table dynamically without complete app rebuild
+          updateJournalTable();
+        });
+      }
+
+      const filterTypeSelect = container.querySelector('#journal-filter-type');
+      if (filterTypeSelect) {
+        filterTypeSelect.addEventListener('change', (e) => {
+          filterType = e.target.value;
+          updateJournalTable();
+        });
+      }
+
+      const filterLevelSelect = container.querySelector('#journal-filter-level');
+      if (filterLevelSelect) {
+        filterLevelSelect.addEventListener('change', (e) => {
+          filterLevel = e.target.value;
+          updateJournalTable();
+        });
+      }
+
+      const clearBtn = container.querySelector('#journal-clear-btn');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          searchQuery = '';
+          filterType = 'all';
+          filterLevel = 'all';
+          render();
+        });
+      }
+    }
+  }
+
+  function updateJournalTable() {
+    const tableBody = container.querySelector('.trust-table tbody');
+    if (!tableBody) return;
+    
+    const state = ui.state;
+    const logs = state.eventLog || [];
+    const filteredLogs = logs.filter(log => {
+      const matchesQuery = !searchQuery || JSON.stringify(log).toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesType = filterType === 'all' || log.type.startsWith(filterType);
+      const matchesLevel = filterLevel === 'all' || log.level === filterLevel;
+      return matchesQuery && matchesType && matchesLevel;
     });
+
+    let journalRowsHTML = '';
+    if (filteredLogs.length === 0) {
+      journalRowsHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 20px;">No matching log events.</td></tr>';
+    } else {
+      filteredLogs.slice(-50).reverse().forEach(log => {
+        const isWarning = log.level === 'WARN' || log.type.includes('fail') || log.type.includes('denied');
+        const isError = log.level === 'ERROR';
+        const rowStyle = isError ? 'color: var(--color-red);' : (isWarning ? 'color: var(--color-amber);' : '');
+        
+        let detailStr = '';
+        if (log.detail) {
+          if (typeof log.detail === 'string') {
+            detailStr = log.detail;
+          } else {
+            detailStr = JSON.stringify(log.detail);
+            if (detailStr.length > 80) detailStr = detailStr.slice(0, 80) + '...';
+          }
+        }
+        
+        journalRowsHTML += `
+          <tr style="${rowStyle}">
+            <td style="font-family: var(--font-mono); font-size: 11px; white-space: nowrap;">${new Date(log.timestamp).toLocaleTimeString()}</td>
+            <td><strong>${window.escapeHTML(log.source)}</strong></td>
+            <td><span style="font-family: var(--font-mono); font-size:11px;">${window.escapeHTML(log.type)}</span></td>
+            <td><span style="font-weight:bold; font-size:10px;">${window.escapeHTML(log.level || 'INFO')}</span></td>
+            <td style="font-size:11.5px; overflow:hidden; text-overflow:ellipsis; max-width: 250px;" title="${window.escapeHTML(JSON.stringify(log.detail))}">
+              ${window.escapeHTML(detailStr)}
+            </td>
+          </tr>
+        `;
+      });
+    }
+    window.renderSafeHTML(tableBody, journalRowsHTML);
   }
 
   render();

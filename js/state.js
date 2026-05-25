@@ -26,6 +26,7 @@ export class OSState {
     this.locks = [];
     this.workflows = [];
     this.eventLog = [];
+    this.approvalsQueue = [];
     this.env = { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
 
     this.systemVars = {
@@ -624,15 +625,45 @@ export class OSState {
     }
   }
 
-  logEvent(type, source, detail = {}) {
+  logEvent(type, source, detail = {}, level = 'INFO') {
+    const cleanDetail = typeof detail === 'string' ? { message: detail } : detail;
     this.eventLog.push({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       type,
       source,
-      detail,
+      detail: cleanDetail,
+      level,
       timestamp: Date.now()
     });
     if (this.eventLog.length > 1000) this.eventLog.shift();
+  }
+
+  addApprovalRequest(callerId, callName, args, details = '') {
+    const id = `appr-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+    const request = {
+      id,
+      callerId,
+      callName,
+      args,
+      details,
+      status: 'pending',
+      timestamp: Date.now()
+    };
+    this.approvalsQueue.push(request);
+    this.logEvent('security.approval_queued', callerId, { id, callName, details }, 'WARN');
+    window.AstraBus?.emit('approvals.changed', { action: 'queued', request });
+    return id;
+  }
+
+  resolveApprovalRequest(id, status) {
+    const idx = this.approvalsQueue.findIndex(a => a.id === id);
+    if (idx === -1) return false;
+    const request = this.approvalsQueue[idx];
+    request.status = status; // 'approved' or 'denied'
+    this.approvalsQueue.splice(idx, 1);
+    this.logEvent('security.approval_resolved', request.callerId, { id, callName: request.callName, status }, status === 'approved' ? 'INFO' : 'WARN');
+    window.AstraBus?.emit('approvals.changed', { action: 'resolved', id, status, request });
+    return request;
   }
 
   createWorkflow(goal, prompt, createdBy = 'User') {

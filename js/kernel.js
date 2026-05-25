@@ -19,9 +19,42 @@ export class Kernel {
   }
 
   syscall(callerId, callName, args) {
-    if (this.policyEngine && !this.policyEngine.checkPermission(callerId, callName, args)) {
+    const permCheck = this.policyEngine ? this.policyEngine.checkPermission(callerId, callName, args) : true;
+    if (permCheck === false) {
+      this.state.logEvent('security.access_denied', callerId, { callName, path: args && args[0] }, 'WARN');
       throw new Error(`Permission Denied: Caller "${callerId}" lacks permission for syscall "${callName}"`);
     }
+
+    if (permCheck === 'ask') {
+      return new Promise((resolve, reject) => {
+        const targetPath = (args && args[0]) || '';
+        const details = `Syscall "${callName}" on target: "${targetPath}"`;
+        const apprId = this.state.addApprovalRequest(callerId, callName, args, details);
+        
+        const unsub = window.AstraBus.on('approvals.changed', (event) => {
+          if (event.id === apprId && event.action === 'resolved') {
+            unsub();
+            if (event.status === 'approved') {
+              try {
+                const result = this.executeSyscall(callerId, callName, args);
+                resolve(result);
+              } catch (err) {
+                reject(err);
+              }
+            } else {
+              reject(new Error(`Permission Denied: User denied approval for syscall "${callName}"`));
+            }
+          }
+        });
+      });
+    }
+
+    return this.executeSyscall(callerId, callName, args);
+  }
+
+  executeSyscall(callerId, callName, args) {
+    this.state.logEvent('kernel.syscall', callerId, { callName, target: args && args[0] }, 'INFO');
+    
     switch (callName) {
       case 'fs:read': {
         const [path, offset, limit] = args;
@@ -57,6 +90,26 @@ export class Kernel {
         } else {
           return this.state.writeFile(path, content);
         }
+      }
+      case 'fs:delete': {
+        const [path] = args;
+        return this.state.deleteFile(path);
+      }
+      case 'fs:mkdir': {
+        const [path] = args;
+        return this.state.createDir(path);
+      }
+      case 'fs:rename': {
+        const [path, newName] = args;
+        return this.state.renameFile(path, newName);
+      }
+      case 'fs:copy': {
+        const [src, dst] = args;
+        return this.state.copyFile(src, dst);
+      }
+      case 'fs:move': {
+        const [src, dst] = args;
+        return this.state.moveFile(src, dst);
       }
       case 'fs:lock': {
         const [path, type] = args;

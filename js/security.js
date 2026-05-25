@@ -159,6 +159,52 @@ window.PolicyEngine = class PolicyEngine {
       }
     }
 
+    // Evaluate Autonomy Safety Policies for autonomous agents
+    const isAgent = typeof callerId === 'string' && (callerId.toLowerCase().includes('agent') || callerId === 'AstraAgent');
+    if (isAgent) {
+      const safety = this.state.registry.safety || {
+        writePolicy: 'ask',
+        commandPolicy: 'ask',
+        networkPolicy: 'approve',
+        settingsPolicy: 'ask',
+        confidenceThreshold: 85
+      };
+
+      let policy = 'ask';
+      if (callName.startsWith('fs:')) {
+        policy = safety.writePolicy;
+      } else if (callName.startsWith('proc:')) {
+        policy = safety.commandPolicy;
+      }
+
+      if (policy === 'deny') {
+        console.warn(`[PolicyEngine] Access Denied: Caller "${callerId}" action "${callName}" blocked by policy (DENY).`);
+        return false;
+      }
+
+      if (policy === 'ask') {
+        return 'ask';
+      }
+
+      if (policy === 'approve') {
+        // Evaluate simulated confidence score based on target path safety
+        let confidence = 90;
+        const targetPath = (args && args[0]) || '';
+        if (targetPath.includes('control.js') || targetPath.includes('index.js')) {
+          confidence = 88;
+        } else if (targetPath.includes('README.md') || targetPath.includes('notes.txt') || targetPath.includes('daily_briefings.md')) {
+          confidence = 96;
+        } else if (targetPath.includes('/etc/') || targetPath.includes('/var/log/')) {
+          confidence = 65;
+        }
+
+        if (confidence < safety.confidenceThreshold) {
+          console.log(`[PolicyEngine] Confidence (${confidence}%) below threshold (${safety.confidenceThreshold}%). Escalating to ask approval.`);
+          return 'ask';
+        }
+      }
+    }
+
     return true;
   }
 };
