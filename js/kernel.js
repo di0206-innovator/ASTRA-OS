@@ -890,17 +890,73 @@ export class Kernel {
     return null;
   }
 
-  executeCommand(rawCmd, currentDir, history = []) {
+  executeCommand(rawCmd, currentDir, history = [], stdin = '') {
     // Environment variable substitution ($VAR and ${VAR})
     rawCmd = rawCmd.replace(/\$\{(\w+)\}|\$(\w+)/g, (match, braced, plain) => {
       const varName = braced || plain;
       return this.state.env[varName] !== undefined ? this.state.env[varName] : match;
     });
 
+    const splitOutsideQuotes = (input, token) => {
+      const parts = [];
+      let buf = '';
+      let inQuotes = false;
+      let quoteChar = null;
+      for (let i = 0; i < input.length; i++) {
+        const ch = input[i];
+        if ((ch === '"' || ch === "'") && input[i - 1] !== '\\') {
+          if (!inQuotes) {
+            inQuotes = true;
+            quoteChar = ch;
+          } else if (quoteChar === ch) {
+            inQuotes = false;
+            quoteChar = null;
+          }
+        }
+        if (!inQuotes && input.slice(i, i + token.length) === token) {
+          parts.push(buf.trim());
+          buf = '';
+          i += token.length - 1;
+          continue;
+        }
+        buf += ch;
+      }
+      if (buf.trim()) parts.push(buf.trim());
+      return parts;
+    };
+
+    const pipeParts = splitOutsideQuotes(rawCmd, '|');
+    if (pipeParts.length > 1) {
+      return pipeParts.reduce((leftRes, segment, index) => {
+        const segmentInput = index === 0 ? stdin : (leftRes.output || []).join('\n');
+        return this.executeCommand(segment, currentDir, history, segmentInput);
+      }, { output: [] });
+    }
+
+    const andParts = splitOutsideQuotes(rawCmd, '&&');
+    if (andParts.length > 1) {
+      let chainRes = { output: [] };
+      for (const segment of andParts) {
+        chainRes = this.executeCommand(segment, currentDir, history, stdin);
+        if (chainRes.cls === 'error') break;
+      }
+      return chainRes;
+    }
+
+    const orParts = splitOutsideQuotes(rawCmd, '||');
+    if (orParts.length > 1) {
+      let chainRes = { output: [], cls: 'error' };
+      for (const segment of orParts) {
+        if (chainRes.cls !== 'error') break;
+        chainRes = this.executeCommand(segment, currentDir, history, stdin);
+      }
+      return chainRes;
+    }
+
     // Check for redirection
     const redir = this.parseRedirection(rawCmd);
     if (redir) {
-      const innerRes = this.executeCommand(redir.cmdPart, currentDir, history);
+      const innerRes = this.executeCommand(redir.cmdPart, currentDir, history, stdin);
       if (innerRes.cls === 'error') {
         return innerRes;
       }
@@ -962,7 +1018,7 @@ export class Kernel {
       const user = this.state.users.find(u => u.username === this.state.currentSession.currentUser);
       if (!user || user.role !== 'admin') return { output: ['sudo: permission denied'], cls: 'error' };
       output.push(`[sudo] password accepted for ${this.state.currentSession.currentUser}`);
-      const innerRes = this.executeCommand(parts.slice(1).join(' '), currentDir, history);
+      const innerRes = this.executeCommand(parts.slice(1).join(' '), currentDir, history, stdin);
       return {
         output: [...output, ...(innerRes.output || [])],
         cls: innerRes.cls,
@@ -1235,20 +1291,20 @@ export class Kernel {
         break;
       }
       case 'grep': {
-        if (args.length < 2) {
+        if (args.length < 1 && !stdin) {
           output.push('grep: usage: grep <pattern> <file>');
           cls = 'error';
           break;
         }
         const pattern = args[0];
-        const path = this.resolveRelativePath(args[1], currentDir);
-        const file = this.state.resolvePath(path);
-        if (!file || file.type !== 'file') {
-          output.push(`grep: ${args[1]}: No such file`);
+        const fileArg = args[1];
+        const sourceText = fileArg ? (this.state.resolvePath(this.resolveRelativePath(fileArg, currentDir))?.content || '') : stdin;
+        if (!sourceText) {
+          output.push(fileArg ? `grep: ${fileArg}: No such file` : 'grep: no input');
           cls = 'error';
           break;
         }
-        const fileLines = (file.content || '').split('\n');
+        const fileLines = sourceText.split('\n');
         let found = false;
         fileLines.forEach((line, i) => {
           if (line.toLowerCase().includes(pattern.toLowerCase())) {
@@ -1263,22 +1319,22 @@ export class Kernel {
         output.push(args.join(' '));
         break;
       case 'wc': {
-        if (!args[0]) {
+        if (!args[0] && !stdin) {
           output.push('wc: missing operand');
           cls = 'error';
           break;
         }
-        const path = this.resolveRelativePath(args[0], currentDir);
-        const file = this.state.resolvePath(path);
-        if (!file || file.type !== 'file') {
-          output.push(`wc: ${args[0]}: No such file`);
+        const sourceText = args[0] ? (this.state.resolvePath(this.resolveRelativePath(args[0], currentDir))?.content || '') : stdin;
+        const label = args[0] || '(stdin)';
+        if (!sourceText) {
+          output.push(`wc: ${label}: No such file`);
           cls = 'error';
           break;
         }
-        const lineCount = (file.content || '').split('\n').length;
-        const wordCount = (file.content || '').split(/\s+/).filter(Boolean).length;
-        const charCount = (file.content || '').length;
-        output.push(`  ${lineCount}  ${wordCount}  ${charCount} ${args[0]}`);
+        const lineCount = sourceText.split('\n').length;
+        const wordCount = sourceText.split(/\s+/).filter(Boolean).length;
+        const charCount = sourceText.length;
+        output.push(`  ${lineCount}  ${wordCount}  ${charCount} ${label}`);
         break;
       }
       case 'ps': {
@@ -1863,7 +1919,7 @@ export class Kernel {
               return trimmed && !trimmed.startsWith('#');
             });
             for (const line of scriptLines) {
-              const lineRes = this.executeCommand(line.trim(), currentDir, history);
+              const lineRes = this.executeCommand(line.trim(), currentDir, history, stdin);
               if (lineRes.output) output.push(...lineRes.output);
               if (lineRes.newDir) newDir = lineRes.newDir;
               if (lineRes.cls === 'error') { cls = 'error'; break; }

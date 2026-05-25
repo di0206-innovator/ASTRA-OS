@@ -18,6 +18,8 @@ export class AgentOrchestrator {
     };
     this.isPaused = false;
     this.vfsSnapshots = {};
+    this.autonomyTimer = null;
+    this.startAutonomyLoop();
   }
 
   // ==========================================
@@ -74,6 +76,29 @@ export class AgentOrchestrator {
       statusPill.querySelector('.status-text').textContent = 'Astra: Idle';
       statusPill.querySelector('.status-pulse').className = 'status-pulse';
     }
+  }
+
+  startAutonomyLoop() {
+    if (this.autonomyTimer) return;
+    this.autonomyTimer = setInterval(() => {
+      const latest = this.state.workflows?.[0];
+      if (!latest) return;
+      if (latest.status === 'queued') {
+        this.state.recordApproval(latest.id, {
+          actor: 'System',
+          decision: 'monitor',
+          note: 'Autonomy loop observed queued workflow'
+        });
+        this.state.updateWorkflow(latest.id, { status: 'observed' });
+        this.state.addNotification('info', 'Agent Monitor', `Observed workflow: ${latest.goal}`);
+      }
+      if (this.state.runIntegrityChecks) {
+        const issues = this.state.runIntegrityChecks();
+        if (issues.length > 0) {
+          this.state.addNotification('warning', 'Agent Monitor', `Integrity issues detected: ${issues.length}`);
+        }
+      }
+    }, 60000);
   }
 
   // ==========================================
