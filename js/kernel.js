@@ -6,7 +6,72 @@ export class Kernel {
   constructor(state) {
     this.state = state;
     this.nextPid = 1000;
+    this.jobs = [];
+    this.nextJobId = 1;
     this.bootDaemons();
+    window.Astra = {
+      syscall: (callName, ...args) => this.syscall(callName, args)
+    };
+  }
+
+  syscall(callName, args) {
+    switch (callName) {
+      case 'fs:read': {
+        const [path, offset, limit] = args;
+        const currentOwner = this.getCurrentUser();
+        if (this.state.isLocked(path, 'read', currentOwner)) {
+          throw new Error(`Permission Denied: File locked exclusively by another process`);
+        }
+        const fileNode = this.state.resolvePath(path);
+        if (!fileNode) {
+          throw new Error(`File not found: ${path}`);
+        }
+        if (fileNode.type !== 'file') {
+          throw new Error(`Not a file: ${path}`);
+        }
+        let content = fileNode.content || '';
+        if (offset !== undefined || limit !== undefined) {
+          const start = offset || 0;
+          const end = limit !== undefined ? start + limit : content.length;
+          return content.slice(start, end);
+        }
+        return content;
+      }
+      case 'fs:write': {
+        const [path, content, append] = args;
+        const currentOwner = this.getCurrentUser();
+        if (this.state.isLocked(path, 'write', currentOwner)) {
+          throw new Error(`Permission Denied: File path is locked`);
+        }
+        if (append) {
+          const fileNode = this.state.resolvePath(path);
+          const existing = fileNode ? (fileNode.content || '') : '';
+          return this.state.writeFile(path, existing + content);
+        } else {
+          return this.state.writeFile(path, content);
+        }
+      }
+      case 'fs:lock': {
+        const [path, type] = args;
+        const currentOwner = this.getCurrentUser();
+        return this.state.lockPath(path, type, currentOwner);
+      }
+      case 'fs:unlock': {
+        const [path] = args;
+        const currentOwner = this.getCurrentUser();
+        return this.state.unlockPath(path, currentOwner);
+      }
+      case 'proc:spawn': {
+        const [name, parentPid] = args;
+        return this.spawnProcess(name, parentPid);
+      }
+      case 'proc:kill': {
+        const [pid] = args;
+        return this.killProcess(pid);
+      }
+      default:
+        throw new Error(`Unknown system call: ${callName}`);
+    }
   }
 
   // ==========================================
@@ -55,10 +120,74 @@ export class Kernel {
     const idx = this.state.processTable.findIndex(p => p.pid === pid);
     if (idx === -1) return { success: false, error: `No process with PID ${pid}` };
     const proc = this.state.processTable[idx];
+    if (proc.worker) {
+      try {
+        proc.worker.terminate();
+      } catch (err) {
+        console.error('Failed to terminate worker for process PID', pid, err);
+      }
+    }
     this.state.processTable.splice(idx, 1);
     this.syslog('INFO', 'kernel', `Killed process ${window.escapeHTML(proc.name)} (PID ${pid})`);
     this.state.saveState();
     return { success: true, name: proc.name };
+  }
+
+  // ==========================================
+  // Job Control Manager
+  // ==========================================
+
+  createJob(command) {
+    const job = {
+      id: this.nextJobId++,
+      command,
+      status: 'Running',
+      outputBuffer: [],
+      foreground: false,
+      startTime: Date.now()
+    };
+    this.jobs.push(job);
+    return job;
+  }
+
+  getJob(id) {
+    return this.jobs.find(j => j.id === parseInt(id));
+  }
+
+  removeJob(id) {
+    const idx = this.jobs.findIndex(j => j.id === parseInt(id));
+    if (idx !== -1) this.jobs.splice(idx, 1);
+  }
+
+  // ==========================================
+  // PATH Resolution Engine
+  // ==========================================
+
+  resolveFromPath(cmdName, currentDir) {
+    // Direct path (./script or /path/to/script)
+    if (cmdName.startsWith('./') || cmdName.startsWith('/')) {
+      const path = cmdName.startsWith('/') ? cmdName : this.resolveRelativePath(cmdName, currentDir);
+      const node = this.state.resolvePath(path);
+      if (node && node.type === 'file') return { content: node.content || '', path };
+      return null;
+    }
+
+    // Search directories in PATH
+    const pathDirs = (this.state.env.PATH || '/bin:/usr/bin').split(':');
+    for (const dir of pathDirs) {
+      const fullPath = dir + '/' + cmdName;
+      const node = this.state.resolvePath(fullPath);
+      if (node && node.type === 'file') return { content: node.content || '', path: fullPath };
+
+      // Try with common extensions
+      for (const ext of ['.sh', '.js']) {
+        const extPath = fullPath + ext;
+        const extNode = this.state.resolvePath(extPath);
+        if (extNode && extNode.type === 'file') return { content: extNode.content || '', path: extPath };
+      }
+    }
+
+    return null;
   }
 
   listProcesses() {
@@ -723,7 +852,98 @@ export class Kernel {
     return results;
   }
 
+  parseRedirection(rawCmd) {
+    let inQuotes = false;
+    let quoteChar = null;
+    for (let i = 0; i < rawCmd.length; i++) {
+      const char = rawCmd[i];
+      if ((char === '"' || char === "'") && (i === 0 || rawCmd[i - 1] !== '\\')) {
+        if (!inQuotes) {
+          inQuotes = true;
+          quoteChar = char;
+        } else if (char === quoteChar) {
+          inQuotes = false;
+          quoteChar = null;
+        }
+      }
+      if (!inQuotes) {
+        if (rawCmd.slice(i, i + 2) === '>>') {
+          return {
+            cmdPart: rawCmd.slice(0, i).trim(),
+            type: 'append',
+            filePart: rawCmd.slice(i + 2).trim()
+          };
+        }
+        if (char === '>') {
+          return {
+            cmdPart: rawCmd.slice(0, i).trim(),
+            type: 'write',
+            filePart: rawCmd.slice(i + 1).trim()
+          };
+        }
+      }
+    }
+    return null;
+  }
+
   executeCommand(rawCmd, currentDir, history = []) {
+    // Environment variable substitution ($VAR and ${VAR})
+    rawCmd = rawCmd.replace(/\$\{(\w+)\}|\$(\w+)/g, (match, braced, plain) => {
+      const varName = braced || plain;
+      return this.state.env[varName] !== undefined ? this.state.env[varName] : match;
+    });
+
+    // Check for redirection
+    const redir = this.parseRedirection(rawCmd);
+    if (redir) {
+      const innerRes = this.executeCommand(redir.cmdPart, currentDir, history);
+      if (innerRes.cls === 'error') {
+        return innerRes;
+      }
+      const targetPath = this.resolveRelativePath(redir.filePart, currentDir);
+      
+      if (innerRes.async) {
+        return {
+          async: true,
+          run: async (writeRow) => {
+            let capturedOutput = [];
+            const mockWriteRow = (text, cls) => {
+              capturedOutput.push(text);
+            };
+            await innerRes.run(mockWriteRow);
+            const outputStr = capturedOutput.join('\n');
+            if (redir.type === 'write') {
+              this.state.writeFile(targetPath, outputStr);
+            } else {
+              const node = this.state.resolvePath(targetPath);
+              const existing = (node && node.type === 'file') ? node.content : '';
+              const sep = (existing && !existing.endsWith('\n')) ? '\n' : '';
+              this.state.writeFile(targetPath, existing + sep + outputStr);
+            }
+            writeRow(`Output redirected to ${redir.filePart}`);
+          }
+        };
+      }
+
+      const outputStr = (innerRes.output || []).join('\n');
+      if (redir.type === 'write') {
+        this.state.writeFile(targetPath, outputStr);
+      } else {
+        const node = this.state.resolvePath(targetPath);
+        const existing = (node && node.type === 'file') ? node.content : '';
+        const sep = (existing && !existing.endsWith('\n')) ? '\n' : '';
+        this.state.writeFile(targetPath, existing + sep + outputStr);
+      }
+      
+      return {
+        output: [],
+        cls: 'success',
+        newDir: innerRes.newDir,
+        action: innerRes.action,
+        toast: innerRes.toast || `Output redirected to ${redir.filePart}`
+      };
+    }
+
     const parts = rawCmd.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
     if (parts.length === 0) return { output: [] };
     const cmd = parts[0];
@@ -759,12 +979,60 @@ export class Kernel {
           'PACKAGE:     apt update, apt install, apt remove, apt list, apt search',
           'NETWORK:     ping, curl, ifconfig, nslookup, netstat, wget, hostname',
           'GIT:         git init/status/add/commit/log/diff/branch/checkout',
+          'ENV:         export KEY=VALUE, unset KEY, env',
+          'JOBS:        command &, jobs, fg [id], bg',
           'SYSTEM:      neofetch, uname, date, df, free, dmesg, clear, history, sysreset',
           'FUN:         cowsay, fortune, sl, figlet (install via apt)',
           ''
         );
         cls = 'info';
         break;
+
+      case 'export': {
+        if (!args[0]) {
+          output.push('export: usage: export KEY=VALUE');
+          cls = 'error';
+          break;
+        }
+        const eqIdx = args[0].indexOf('=');
+        if (eqIdx === -1) {
+          const key = args[0];
+          const val = this.state.env[key] || '';
+          output.push(val);
+        } else {
+          const key = args[0].substring(0, eqIdx).trim();
+          const val = args[0].substring(eqIdx + 1).replace(/^"|"$/g, '').trim();
+          if (key) {
+            this.state.env[key] = val;
+            this.state.saveState();
+          } else {
+            output.push('export: invalid identifier');
+            cls = 'error';
+          }
+        }
+        break;
+      }
+      case 'env': {
+        Object.entries(this.state.env).forEach(([k, v]) => {
+          output.push(`${k}=${v}`);
+        });
+        break;
+      }
+      case 'unset': {
+        if (!args[0]) {
+          output.push('unset: usage: unset VAR_NAME');
+          cls = 'error';
+          break;
+        }
+        if (this.state.env[args[0]] !== undefined) {
+          delete this.state.env[args[0]];
+          this.state.saveState();
+          output.push(`Unset: ${args[0]}`);
+        } else {
+          output.push(`unset: ${args[0]}: not set`);
+        }
+        break;
+      }
 
       case 'ls': {
         const target = args[0] ? this.resolveRelativePath(args[0], currentDir) : currentDir;
@@ -1103,8 +1371,26 @@ export class Kernel {
           cls = 'error';
           break;
         }
-        output.push(...this.curl(args[0]));
-        break;
+        const url = args[0];
+        return {
+          async: true,
+          run: async (writeRow) => {
+            writeRow(`% Total    % Received % Xferd  Average Speed   Time    Time     Time  Current`);
+            writeRow(`                                 Dload  Upload   Total   Spent    Left  Speed`);
+            try {
+              const cleanUrl = url.startsWith('http') ? url : `http://${url}`;
+              writeRow(`[curl] Fetching via proxy: ${cleanUrl}...`);
+              const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(cleanUrl)}`;
+              const response = await fetch(proxyUrl);
+              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              const data = await response.json();
+              const contents = data.contents;
+              writeRow(contents);
+            } catch (err) {
+              writeRow(`curl: (6) Could not resolve host or proxy failed: ${err.message}`, 'error');
+            }
+          }
+        };
       }
       case 'ifconfig':
         output.push(...this.ifconfig());
@@ -1127,16 +1413,124 @@ export class Kernel {
           cls = 'error';
           break;
         }
-        const fileName = args[0].split('/').pop() || 'index.html';
-        output.push(
-          `--${new Date().toLocaleTimeString()}--  ${args[0]}`,
-          `Resolving host... connected.`,
-          `HTTP request sent, awaiting response... 200 OK`,
-          `Length: ${Math.floor(Math.random() * 50000 + 5000)} bytes`,
-          `Saving to: '${fileName}'`,
-          `${fileName}  100%[==================>]  saved.`
-        );
-        cls = 'success';
+        const url = args[0];
+        return {
+          async: true,
+          run: async (writeRow) => {
+            const fileName = url.split('/').pop() || 'index.html';
+            writeRow(`--${new Date().toLocaleTimeString()}--  ${url}`);
+            writeRow(`Resolving host via CORS proxy...`);
+            try {
+              const cleanUrl = url.startsWith('http') ? url : `http://${url}`;
+              const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(cleanUrl)}`;
+              const response = await fetch(proxyUrl);
+              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              const data = await response.json();
+              const contents = data.contents;
+              const size = new Blob([contents]).size;
+              writeRow(`Length: ${size} bytes`);
+              writeRow(`Saving to: '${fileName}'`);
+              
+              const targetPath = this.resolveRelativePath(fileName, currentDir);
+              this.state.writeFile(targetPath, contents);
+              writeRow(`100%[==================>] saved successfully.`);
+            } catch (err) {
+              writeRow(`wget: download failed: ${err.message}`, 'error');
+            }
+          }
+        };
+      }
+      case 'pbcopy': {
+        const text = args.join(' ');
+        return {
+          async: true,
+          run: async (writeRow) => {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              try {
+                await navigator.clipboard.writeText(text);
+                writeRow(`Contents copied to host clipboard.`);
+              } catch (err) {
+                writeRow(`pbcopy: failed to write clipboard: ${err.message}`, 'error');
+              }
+            } else {
+              writeRow(`pbcopy: Clipboard API not supported.`, 'error');
+            }
+          }
+        };
+      }
+      case 'pbpaste': {
+        return {
+          async: true,
+          run: async (writeRow) => {
+            if (navigator.clipboard && navigator.clipboard.readText) {
+              try {
+                const text = await navigator.clipboard.readText();
+                writeRow(text);
+              } catch (err) {
+                writeRow(`pbpaste: failed to read clipboard: ${err.message}`, 'error');
+              }
+            } else {
+              writeRow(`pbpaste: Clipboard API not supported or blocked.`, 'error');
+            }
+          }
+        };
+      }
+      case 'store': {
+        const sub = args[0];
+        if (sub === 'status') {
+          return {
+            async: true,
+            run: async (writeRow) => {
+              writeRow(`━━━ Astra OS VFS Storage Diagnostics ━━━`);
+              writeRow(`IndexedDB Adapter: ${this.state.db ? 'CONNECTED' : 'DISCONNECTED'}`);
+              
+              if (this.state.db) {
+                writeRow(`Database Name: AstraOSDatabase`);
+                writeRow(`Object Stores: ${Array.from(this.state.db.objectStoreNames).join(', ')}`);
+              }
+              
+              if (navigator.storage && navigator.storage.estimate) {
+                try {
+                  const est = await navigator.storage.estimate();
+                  const usedMB = (est.usage / (1024 * 1024)).toFixed(2);
+                  const quotaMB = (est.quota / (1024 * 1024)).toFixed(2);
+                  writeRow(`Physical Storage Used: ${usedMB} MB / ${quotaMB} MB (${(est.usage / est.quota * 100).toFixed(2)}%)`);
+                } catch (e) {
+                  writeRow(`Physical Storage Used: Estimate failed: ${e.message}`);
+                }
+              } else {
+                writeRow(`Physical Storage Used: Browser Storage Estimate API not supported.`);
+              }
+              
+              const lsBytes = new Blob([localStorage.getItem('astra_os_state') || '']).size;
+              writeRow(`LocalStorage Cache Size: ${(lsBytes / 1024).toFixed(2)} KB / 5120.00 KB`);
+            }
+          };
+        } else if (sub === 'sync') {
+          return {
+            async: true,
+            run: async (writeRow) => {
+              writeRow(`Synchronizing in-memory VFS to IndexedDB...`);
+              if (this.state.db) {
+                try {
+                  this.state._executeSaveState();
+                  writeRow(`VFS Synchronized successfully. State committed to database.`);
+                } catch (e) {
+                  writeRow(`Sync failed: ${e.message}`, 'error');
+                }
+              } else {
+                writeRow(`Sync failed: IndexedDB connection not active.`, 'error');
+              }
+            }
+          };
+        } else {
+          output.push(
+            `store: usage: store [status|sync]`,
+            `  status: View IndexedDB and LocalStorage connection metrics & usage`,
+            `  sync:   Force commit in-memory filesystem to storage database`
+          );
+          cls = 'info';
+        }
         break;
       }
       case 'hostname':
@@ -1187,6 +1581,66 @@ export class Kernel {
           output.push(...this.neofetch());
         }
         break;
+      case 'node': {
+        if (!args[0]) {
+          output.push('node: missing script operand');
+          cls = 'error';
+          break;
+        }
+        const path = this.resolveRelativePath(args[0], currentDir);
+        const fileNode = this.state.resolvePath(path);
+        if (!fileNode || fileNode.type !== 'file') {
+          output.push(`node: cannot open file '${args[0]}': No such file or directory`);
+          cls = 'error';
+          break;
+        }
+        const fileName = path.split('/').pop();
+        const content = fileNode.content || '';
+
+        return {
+          async: true,
+          run: async (writeRow) => {
+            writeRow(`[node] Executing script: ${args[0]}`);
+            writeRow(`[node] Initializing isolated Web Worker context...`);
+            
+            const proc = this.spawnProcess(`node:${fileName}`);
+            writeRow(`[node] Started process: pid ${proc.pid}`);
+
+            try {
+              const worker = new Worker('js/worker.js');
+              proc.worker = worker;
+              
+              worker.onmessage = (msg) => {
+                const { type, text, cls, callName, args: syscallArgs, id } = msg.data;
+                if (type === 'log') {
+                  writeRow(`[node PID ${proc.pid}] ${text}`, cls);
+                } else if (type === 'syscall') {
+                  try {
+                    const result = this.syscall(callName, syscallArgs);
+                    worker.postMessage({ type: 'syscall_response', id, result });
+                  } catch (e) {
+                    worker.postMessage({ type: 'syscall_response', id, error: e.message });
+                    writeRow(`[node PID ${proc.pid}] Syscall error: ${e.message}`, 'error');
+                  }
+                } else if (type === 'done') {
+                  writeRow(`[node PID ${proc.pid}] Process finished execution.`);
+                  this.killProcess(proc.pid);
+                }
+              };
+
+              worker.onerror = (err) => {
+                writeRow(`[node PID ${proc.pid}] Worker exception: ${err.message}`, 'error');
+                this.killProcess(proc.pid);
+              };
+
+              worker.postMessage({ type: 'start', code: content, path, env: this.state.env });
+            } catch (err) {
+              writeRow(`[node] Failed to spawn worker: ${err.message}`, 'error');
+              this.killProcess(proc.pid);
+            }
+          }
+        };
+      }
       case 'uname':
         output.push(args.includes('-a') ? 'Astra astra-desktop 6.2.0-astra #1 SMP x86_64 GNU/Astra' : 'Astra');
         break;
@@ -1310,9 +1764,122 @@ export class Kernel {
         }
         break;
 
-      default:
-        output.push(`${cmd}: command not found. Type 'help' for available commands.`);
+      case 'jobs': {
+        if (this.jobs.length === 0) {
+          output.push('No active jobs.');
+        } else {
+          this.jobs.forEach(j => {
+            output.push(`[${j.id}]  ${j.status.padEnd(10)}  ${j.command}`);
+          });
+        }
+        break;
+      }
+      case 'fg': {
+        let jobIdStr = args[0] || '';
+        if (jobIdStr.startsWith('%')) jobIdStr = jobIdStr.substring(1);
+        const jobId = parseInt(jobIdStr) || (this.jobs.length > 0 ? this.jobs[this.jobs.length - 1].id : 0);
+        if (!jobId) {
+          output.push('fg: no current job');
+          cls = 'error';
+          break;
+        }
+        const job = this.jobs.find(j => j.id === jobId);
+        if (!job) {
+          output.push(`fg: ${jobId}: no such job`);
+          cls = 'error';
+          break;
+        }
+        output.push(`[${job.id}]  Foregrounded: ${job.command}`);
+        job.outputBuffer.forEach(line => output.push(line));
+        job.outputBuffer = [];
+        if (job.status === 'Done') {
+          output.push(`[${job.id}]  Done`);
+          this.removeJob(job.id);
+        } else {
+          job.foreground = true;
+        }
+        return { output, cls, newDir, action, toast, foregroundJobId: job.status !== 'Done' ? job.id : null };
+      }
+      case 'bg': {
+        if (this.jobs.length === 0) {
+          output.push('bg: no current job');
+        } else {
+          this.jobs.forEach(j => {
+            output.push(`[${j.id}]  ${j.status.padEnd(10)}  ${j.command}`);
+          });
+        }
+        break;
+      }
+
+      default: {
+        // PATH Executable Resolution — search PATH dirs for scripts
+        const resolvedFile = this.resolveFromPath(cmd, currentDir);
+        if (resolvedFile) {
+          const fileContent = resolvedFile.content;
+          const filePath = resolvedFile.path;
+
+          // Shell script execution (sequential line-by-line interpreter)
+          if (filePath.endsWith('.sh') || fileContent.trimStart().startsWith('#!/bin/sh')) {
+            const scriptLines = fileContent.split('\n').filter(l => {
+              const trimmed = l.trim();
+              return trimmed && !trimmed.startsWith('#');
+            });
+            for (const line of scriptLines) {
+              const lineRes = this.executeCommand(line.trim(), currentDir, history);
+              if (lineRes.output) output.push(...lineRes.output);
+              if (lineRes.newDir) newDir = lineRes.newDir;
+              if (lineRes.cls === 'error') { cls = 'error'; break; }
+            }
+            break;
+          }
+
+          // JavaScript file execution via Web Worker sandbox
+          if (filePath.endsWith('.js') || fileContent.trimStart().startsWith('#!/usr/bin/env node')) {
+            const fName = filePath.split('/').pop();
+            const fContent = fileContent;
+            return {
+              async: true,
+              run: async (writeRow) => {
+                writeRow('[exec] Running: ' + filePath);
+                const proc = this.spawnProcess('exec:' + fName);
+                writeRow('[exec] PID ' + proc.pid);
+                try {
+                  const worker = new Worker('js/worker.js');
+                  proc.worker = worker;
+                  worker.onmessage = (msg) => {
+                    const { type, text, cls, callName, args: syscallArgs, id } = msg.data;
+                    if (type === 'log') {
+                      writeRow('[PID ' + proc.pid + '] ' + text, cls);
+                    } else if (type === 'syscall') {
+                      try {
+                        const result = this.syscall(callName, syscallArgs);
+                        worker.postMessage({ type: 'syscall_response', id, result });
+                      } catch (e) {
+                        worker.postMessage({ type: 'syscall_response', id, error: e.message });
+                        writeRow('[PID ' + proc.pid + '] Syscall error: ' + e.message, 'error');
+                      }
+                    } else if (type === 'done') {
+                      writeRow('[PID ' + proc.pid + '] Process finished.');
+                      this.killProcess(proc.pid);
+                    }
+                  };
+                  worker.onerror = (err) => {
+                    writeRow('[PID ' + proc.pid + '] Worker exception: ' + err.message, 'error');
+                    this.killProcess(proc.pid);
+                  };
+                  worker.postMessage({ type: 'start', code: fContent, path: filePath, env: this.state.env });
+                } catch (err) {
+                  writeRow('[exec] Failed to spawn worker: ' + err.message, 'error');
+                  this.killProcess(proc.pid);
+                }
+              }
+            };
+          }
+        }
+
+        output.push(cmd + ': command not found. Type \'help\' for available commands.');
         cls = 'error';
+      }
     }
 
     return {

@@ -22,6 +22,8 @@ export class OSState {
     this.registry = {};
     this.notifications = [];
     this.trash = [];
+    this.locks = [];
+    this.env = { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
 
     this.systemVars = {
       user: 'Divyanshu',
@@ -38,6 +40,44 @@ export class OSState {
     };
 
     this.initializeState();
+    this.initIndexedDB();
+  }
+
+  initIndexedDB() {
+    return new Promise((resolve) => {
+      const request = indexedDB.open('AstraOSDatabase', 1);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('state')) {
+          db.createObjectStore('state');
+        }
+      };
+      request.onsuccess = (e) => {
+        this.db = e.target.result;
+        const transaction = this.db.transaction(['state'], 'readonly');
+        const store = transaction.objectStore('state');
+        const getRequest = store.get('current_state');
+        getRequest.onsuccess = () => {
+          if (getRequest.result) {
+            const parsed = getRequest.result;
+            if (parsed.fs) this.fs = parsed.fs;
+            if (parsed.memoryGraph) this.memoryGraph = parsed.memoryGraph;
+            if (parsed.agentTasks) this.agentTasks = parsed.agentTasks;
+            if (parsed.registry) this.registry = parsed.registry;
+            if (parsed.processTable) this.processTable = parsed.processTable;
+            if (parsed.env) this.env = parsed.env;
+            console.log('[IndexedDB] Successfully loaded state.');
+            if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+            if (window.refreshTasksBoard) window.refreshTasksBoard();
+            if (window.drawMemoryGraphApp) window.drawMemoryGraphApp();
+            if (window.refreshSidebarMemories) window.refreshSidebarMemories();
+          }
+          resolve(true);
+        };
+        getRequest.onerror = () => resolve(false);
+      };
+      request.onerror = () => resolve(false);
+    });
   }
 
   initializeState() {
@@ -73,6 +113,8 @@ export class OSState {
         }
         this.notifications = parsed.notifications || [];
         this.trash = parsed.trash || [];
+        this.locks = parsed.locks || [];
+        this.env = parsed.env || { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
         // Ensure users structure exists and is populated
         if (this.users.length === 0) {
           this.seedUsers();
@@ -177,6 +219,7 @@ export class OSState {
     this.gitRepos = {};
     this.notifications = [];
     this.trash = [];
+    this.env = { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
     this.currentSession = {
       currentUser: 'divyanshu',
       uid: 1000,
@@ -517,6 +560,15 @@ export class OSState {
   // Persistence
   // ==========================================
   saveState() {
+    if (this._saveTimeout) {
+      clearTimeout(this._saveTimeout);
+    }
+    this._saveTimeout = setTimeout(() => {
+      this._executeSaveState();
+    }, 100);
+  }
+
+  _executeSaveState() {
     const raw = {
       fs: this.fs,
       memoryGraph: this.memoryGraph,
@@ -534,16 +586,76 @@ export class OSState {
       hardware: this.hardware,
       registry: this.registry,
       notifications: this.notifications,
-      trash: this.trash
+      trash: this.trash,
+      locks: this.locks,
+      env: this.env
     };
+
+    if (this.db) {
+      try {
+        const transaction = this.db.transaction(['state'], 'readwrite');
+        const store = transaction.objectStore('state');
+        store.put(raw, 'current_state');
+      } catch (err) {
+        console.error('[IndexedDB] Save state error', err);
+      }
+    }
+
     try {
       localStorage.setItem('astra_os_state', JSON.stringify(raw));
     } catch (e) {
-      console.warn('localStorage quota exceeded, trimming logs');
-      this.auditLogs = this.auditLogs.slice(0, 50);
-      this.notifications = this.notifications.slice(-50);
-      try { localStorage.setItem('astra_os_state', JSON.stringify(raw)); } catch (e2) { /* give up */ }
+      console.warn('localStorage quota exceeded, saving minimally to localStorage and relying on IndexedDB');
+      try {
+        localStorage.setItem('astra_os_state', JSON.stringify({ ...raw, fs: {}, auditLogs: [] }));
+      } catch (e2) { /* give up */ }
     }
+  }
+
+  // ==========================================
+  // File System Path Locking Helper Methods
+  // ==========================================
+  lockPath(path, type, owner) {
+    const existing = this.locks.filter(l => l.path === path);
+    if (type === 'exclusive') {
+      if (existing.length > 0) {
+        if (existing.some(l => l.owner !== owner)) {
+          return false;
+        }
+      }
+    } else {
+      if (existing.some(l => l.type === 'exclusive' && l.owner !== owner)) {
+        return false;
+      }
+    }
+    const alreadyHeld = this.locks.find(l => l.path === path && l.owner === owner);
+    if (alreadyHeld) {
+      alreadyHeld.type = type;
+    } else {
+      this.locks.push({ path, type, owner, timestamp: Date.now() });
+    }
+    this.saveState();
+    return true;
+  }
+
+  unlockPath(path, owner) {
+    const idx = this.locks.findIndex(l => l.path === path && l.owner === owner);
+    if (idx !== -1) {
+      this.locks.splice(idx, 1);
+      this.saveState();
+      return true;
+    }
+    return false;
+  }
+
+  isLocked(path, checkType, owner) {
+    const existing = this.locks.filter(l => l.path === path);
+    if (existing.length === 0) return false;
+    if (checkType === 'write') {
+      return existing.some(l => l.owner !== owner && (l.type === 'exclusive' || l.type === 'shared'));
+    } else if (checkType === 'read') {
+      return existing.some(l => l.type === 'exclusive' && l.owner !== owner);
+    }
+    return false;
   }
 
   // ==========================================
@@ -709,6 +821,27 @@ export class OSState {
     }
   }
 
+  addTask(title, desc, status = 'pending', assigned = 'User') {
+    const id = 'task-' + Date.now();
+    const task = { id, title, desc, status, assigned };
+    this.agentTasks.push(task);
+    this.addAuditLog('User', `Added task: [${window.escapeHTML(title)}]`);
+    this.saveState();
+    return task;
+  }
+
+  deleteTask(taskId) {
+    const idx = this.agentTasks.findIndex(t => t.id === taskId);
+    if (idx !== -1) {
+      const task = this.agentTasks[idx];
+      this.agentTasks.splice(idx, 1);
+      this.addAuditLog('User', `Deleted task: [${window.escapeHTML(task.title)}]`);
+      this.saveState();
+      return true;
+    }
+    return false;
+  }
+
   addNotification(type, source, message) {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     this.notifications.push({ id: Date.now(), type, source, message, time, read: false });
@@ -726,7 +859,17 @@ export class OSState {
   }
 
   resetAllState() {
+    if (this._saveTimeout) clearTimeout(this._saveTimeout);
     localStorage.removeItem('astra_os_state');
+    if (this.db) {
+      try {
+        const transaction = this.db.transaction(['state'], 'readwrite');
+        const store = transaction.objectStore('state');
+        store.delete('current_state');
+      } catch (err) {
+        console.error('[IndexedDB] Clear error', err);
+      }
+    }
     this.seedDefaults();
   }
 }

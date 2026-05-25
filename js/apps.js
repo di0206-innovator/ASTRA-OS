@@ -10,16 +10,24 @@ window.AstraApps = window.AstraApps || {};
 window.AstraApps.explorer = function(container, ui) {
   let currentPath = '/home/divyanshu';
   let selectedItem = null;
+  let searchTerm = '';
 
   function render() {
     const dir = ui.state.resolvePath(currentPath);
     if (!dir || dir.type !== 'dir') { currentPath = '/'; render(); return; }
 
     const pathParts = currentPath.split('/').filter(Boolean);
-    const entries = Object.keys(dir.children || {}).map(name => ({ name, ...Reflect.get(dir.children, window.sanitizeKey(name)) }));
+    let entries = Object.keys(dir.children || {}).map(name => ({ name, ...Reflect.get(dir.children, window.sanitizeKey(name)) }));
+    
+    // Apply search filter if active
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase().trim();
+      entries = entries.filter(e => e.name.toLowerCase().includes(q));
+    }
+
     let explorerGridHTML = '';
     if (entries.length === 0) {
-      explorerGridHTML = '<div class="explorer-empty">This folder is empty</div>';
+      explorerGridHTML = `<div class="explorer-empty">${searchTerm.trim() ? 'No matching files' : 'This folder is empty'}</div>`;
     } else {
       entries.forEach(e => {
         const selectedClass = selectedItem === e.name ? 'selected' : '';
@@ -48,9 +56,12 @@ window.AstraApps.explorer = function(container, ui) {
             <span class="breadcrumb-part" data-path="/">/</span>
             ${breadcrumbHTML}
           </div>
+          <input type="text" class="explorer-search" id="exp-search" placeholder="Search..." value="${window.escapeHTML(searchTerm)}">
           <div class="explorer-tb-actions">
             <button class="explorer-tb-btn" id="exp-newfolder" title="New Folder">📁+</button>
             <button class="explorer-tb-btn" id="exp-newfile" title="New File">📄+</button>
+            <button class="explorer-tb-btn" id="exp-copy" title="Copy" ${!selectedItem ? 'disabled' : ''}>📋</button>
+            <button class="explorer-tb-btn" id="exp-paste" title="Paste" ${!window.AstraClipboard ? 'disabled' : ''}>📥</button>
             <button class="explorer-tb-btn" id="exp-rename" title="Rename" ${!selectedItem ? 'disabled' : ''}>✏️</button>
             <button class="explorer-tb-btn" id="exp-delete" title="Delete" ${!selectedItem ? 'disabled' : ''}>🗑</button>
           </div>
@@ -66,7 +77,7 @@ window.AstraApps.explorer = function(container, ui) {
           </div>
           <div class="explorer-fav-section">
             <div class="explorer-fav-title">System</div>
-            <div class="explorer-fav-item" data-path="/"">💽 Root (/)</div>
+            <div class="explorer-fav-item" data-path="/">💽 Root (/)</div>
             <div class="explorer-fav-item" data-path="/etc">⚙ /etc</div>
             <div class="explorer-fav-item" data-path="/var/log">📋 /var/log</div>
             <div class="explorer-fav-item" data-path="/tmp">🗑 /tmp</div>
@@ -82,13 +93,13 @@ window.AstraApps.explorer = function(container, ui) {
     // Events
     container.querySelector('#exp-back')?.addEventListener('click', () => {
       const parts = currentPath.split('/').filter(Boolean);
-      if (parts.length > 0) { parts.pop(); currentPath = '/' + parts.join('/'); selectedItem = null; render(); }
+      if (parts.length > 0) { parts.pop(); currentPath = '/' + parts.join('/'); selectedItem = null; searchTerm = ''; render(); }
     });
     container.querySelectorAll('.breadcrumb-part').forEach(b => {
-      b.addEventListener('click', () => { currentPath = b.getAttribute('data-path') || '/'; selectedItem = null; render(); });
+      b.addEventListener('click', () => { currentPath = b.getAttribute('data-path') || '/'; selectedItem = null; searchTerm = ''; render(); });
     });
     container.querySelectorAll('.explorer-fav-item').forEach(f => {
-      f.addEventListener('click', () => { currentPath = f.getAttribute('data-path'); selectedItem = null; render(); });
+      f.addEventListener('click', () => { currentPath = f.getAttribute('data-path'); selectedItem = null; searchTerm = ''; render(); });
     });
     container.querySelectorAll('.explorer-item-v2').forEach(item => {
       item.addEventListener('click', (e) => {
@@ -100,7 +111,7 @@ window.AstraApps.explorer = function(container, ui) {
       item.addEventListener('dblclick', () => {
         const name = item.getAttribute('data-name');
         const type = item.getAttribute('data-type');
-        if (type === 'dir') { currentPath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`; selectedItem = null; render(); }
+        if (type === 'dir') { currentPath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`; selectedItem = null; searchTerm = ''; render(); }
         else {
           const filePath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
           if (window.editorOpenFile) {
@@ -112,6 +123,48 @@ window.AstraApps.explorer = function(container, ui) {
         }
       });
     });
+
+    // Search Box Real-Time Event
+    const searchInput = container.querySelector('#exp-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        searchTerm = e.target.value;
+        const q = searchTerm.toLowerCase().trim();
+        const items = container.querySelectorAll('.explorer-item-v2');
+        const main = container.querySelector('#exp-main');
+        let visibleCount = 0;
+
+        items.forEach(item => {
+          const name = item.getAttribute('data-name').toLowerCase();
+          if (name.includes(q)) {
+            item.style.display = '';
+            visibleCount++;
+          } else {
+            item.style.display = 'none';
+          }
+        });
+
+        let emptyMsg = container.querySelector('.explorer-empty');
+        if (visibleCount === 0) {
+          if (!emptyMsg) {
+            const div = document.createElement('div');
+            div.className = 'explorer-empty';
+            div.textContent = 'No matching files';
+            main.appendChild(div);
+          } else {
+            emptyMsg.textContent = 'No matching files';
+            emptyMsg.style.display = '';
+          }
+        } else {
+          if (emptyMsg) emptyMsg.style.display = 'none';
+        }
+      });
+      // Keep input focused
+      searchInput.focus();
+      // Move cursor to end of input text
+      const len = searchInput.value.length;
+      searchInput.setSelectionRange(len, len);
+    }
 
     // Toolbar actions
     container.querySelector('#exp-newfolder')?.addEventListener('click', () => {
@@ -127,11 +180,118 @@ window.AstraApps.explorer = function(container, ui) {
       const name = prompt('File name:');
       if (name && name.trim()) {
         const path = currentPath === '/' ? `/${name.trim()}` : `${currentPath}/${name.trim()}`;
-        ui.state.writeFile(path, '');
-        ui.showToast('File Created', name.trim(), 'success');
-        render();
+        try {
+          Astra.syscall('fs:write', path, '');
+          ui.showToast('File Created', name.trim(), 'success');
+          render();
+        } catch (err) {
+          ui.showToast('Error', err.message, 'error');
+        }
       }
     });
+
+    // Copy Event
+    container.querySelector('#exp-copy')?.addEventListener('click', () => {
+      if (!selectedItem) return;
+      const srcPath = currentPath === '/' ? `/${selectedItem}` : `${currentPath}/${selectedItem}`;
+      window.AstraClipboard = {
+        type: ui.state.resolvePath(srcPath).type,
+        name: selectedItem,
+        path: srcPath
+      };
+
+      const node = ui.state.resolvePath(srcPath);
+      if (node && node.type === 'file') {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(node.content || '').then(() => {
+            ui.showToast('Copied to Clipboard (Host Shared)', selectedItem, 'info');
+          }).catch(err => {
+            ui.showToast('Copied to Clipboard', selectedItem, 'info');
+          });
+        } else {
+          ui.showToast('Copied to Clipboard', selectedItem, 'info');
+        }
+      } else {
+        ui.showToast('Copied to Clipboard', selectedItem, 'info');
+      }
+      render();
+    });
+
+    // Paste Event
+    container.querySelector('#exp-paste')?.addEventListener('click', async () => {
+      let hostClipboardText = '';
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        try {
+          hostClipboardText = await navigator.clipboard.readText();
+        } catch (err) {
+          console.warn('Failed to read from host clipboard', err);
+        }
+      }
+
+      const localFileContent = window.AstraClipboard && window.AstraClipboard.path ? 
+        (ui.state.resolvePath(window.AstraClipboard.path)?.content || '') : null;
+
+      if (hostClipboardText && hostClipboardText !== localFileContent) {
+        let fileName = 'pasted_text.txt';
+        let dstPath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
+        if (ui.state.resolvePath(dstPath)) {
+          let count = 1;
+          do {
+            fileName = `pasted_text_${count}.txt`;
+            dstPath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
+            count++;
+          } while (ui.state.resolvePath(dstPath));
+        }
+        try {
+          Astra.syscall('fs:write', dstPath, hostClipboardText);
+          ui.showToast('Pasted from Host Clipboard', fileName, 'success');
+          render();
+          return;
+        } catch (e) {
+          ui.showToast('Paste Error', e.message, 'error');
+        }
+      }
+
+      if (!window.AstraClipboard) return;
+      const srcPath = window.AstraClipboard.path;
+      
+      let newName = window.AstraClipboard.name;
+      let dstPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
+      
+      if (ui.state.resolvePath(dstPath)) {
+        const parts = newName.split('.');
+        const ext = parts.length > 1 ? '.' + parts.pop() : '';
+        const base = parts.join('.');
+        let count = 1;
+        do {
+          newName = `${base}_copy${count}${ext}`;
+          dstPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
+          count++;
+        } while (ui.state.resolvePath(dstPath));
+      }
+
+      function copyRecursive(s, d) {
+        const node = ui.state.resolvePath(s);
+        if (!node) return false;
+        if (node.type === 'file') {
+          ui.state.writeFile(d, node.content || '');
+        } else if (node.type === 'dir') {
+          ui.state.createDir(d);
+          for (const name of Object.keys(node.children || {})) {
+            copyRecursive(s + '/' + name, d + '/' + name);
+          }
+        }
+        return true;
+      }
+
+      if (copyRecursive(srcPath, dstPath)) {
+        ui.showToast('Pasted successfully', newName, 'success');
+        render();
+      } else {
+        ui.showToast('Paste Failed', 'Could not copy item', 'error');
+      }
+    });
+
     container.querySelector('#exp-rename')?.addEventListener('click', () => {
       if (!selectedItem) return;
       const newName = prompt('Rename to:', selectedItem);
@@ -157,8 +317,10 @@ window.AstraApps.explorer = function(container, ui) {
   function updateToolbarButtons() {
     const renameBtn = container.querySelector('#exp-rename');
     const deleteBtn = container.querySelector('#exp-delete');
+    const copyBtn = container.querySelector('#exp-copy');
     if (renameBtn) renameBtn.disabled = !selectedItem;
     if (deleteBtn) deleteBtn.disabled = !selectedItem;
+    if (copyBtn) copyBtn.disabled = !selectedItem;
   }
 
   function getFileIcon(name) {
@@ -206,14 +368,42 @@ window.AstraApps.editor = function(container, ui) {
     return files;
   }
 
+  function formatCode(code) {
+    let lines = code.split('\n');
+    let indentLevel = 0;
+    let formattedLines = lines.map(line => {
+      let trimmed = line.trim();
+      if (trimmed.startsWith('}')) {
+        indentLevel = Math.max(0, indentLevel - 1);
+      }
+      
+      const indent = '  '.repeat(indentLevel);
+      
+      const openBraces = (trimmed.match(/\{/g) || []).length;
+      const closeBraces = (trimmed.match(/\}/g) || []).length;
+      indentLevel += (openBraces - closeBraces);
+      
+      return trimmed ? indent + trimmed : '';
+    });
+    return formattedLines.join('\n');
+  }
+
   function openFileInEditor(path) {
     const existing = openFiles.findIndex(f => f.path === path);
     if (existing >= 0) { activeFileIdx = existing; renderEditor(); return; }
-    const node = ui.state.resolvePath(path);
-    if (!node || node.type !== 'file') return;
-    openFiles.push({ path, name: node.name, content: node.content });
-    activeFileIdx = openFiles.length - 1;
-    renderEditor();
+    try {
+      const locked = Astra.syscall('fs:lock', path, 'exclusive');
+      if (!locked) {
+        ui.showToast('Lock Notice', 'File is locked or currently edited by another process.', 'warning');
+      }
+      const content = Astra.syscall('fs:read', path);
+      const name = path.split('/').pop();
+      openFiles.push({ path, name, content, locked });
+      activeFileIdx = openFiles.length - 1;
+      renderEditor();
+    } catch (err) {
+      ui.showToast('Error', err.message, 'error');
+    }
   }
 
   window.AstraApps._editorOpen = openFileInEditor;
@@ -252,7 +442,13 @@ window.AstraApps.editor = function(container, ui) {
         </div>
         <div class="editor-main">
           <div class="editor-tabs">
-            ${editorTabsHTML}
+            <div style="display: flex;">
+              ${editorTabsHTML}
+            </div>
+            <div class="editor-actions-tb" style="display: flex; align-items: center; padding-right: 8px; gap: 6px;">
+              <button class="editor-tb-btn" id="editor-run" title="Run Script" ${!activeFile ? 'disabled' : ''}>⚡ Run</button>
+              <button class="editor-tb-btn" id="editor-format" title="Format Code" ${!activeFile ? 'disabled' : ''}>🧹 Format</button>
+            </div>
           </div>
           <textarea class="editor-textarea" id="editor-content" spellcheck="false" ${!activeFile ? 'disabled placeholder="Select a file to edit..."' : ''}>${activeFile ? activeFile.content : ''}</textarea>
           <div class="editor-statusbar">
@@ -278,6 +474,14 @@ window.AstraApps.editor = function(container, ui) {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const idx = parseInt(btn.getAttribute('data-close'));
+        const f = openFiles[idx];
+        if (f && f.locked) {
+          try {
+            Astra.syscall('fs:unlock', f.path);
+          } catch (err) {
+            console.error('Failed to unlock path', f.path, err);
+          }
+        }
         openFiles.splice(idx, 1);
         if (activeFileIdx >= openFiles.length) activeFileIdx = openFiles.length - 1;
         renderEditor();
@@ -286,8 +490,51 @@ window.AstraApps.editor = function(container, ui) {
     container.querySelector('#editor-content')?.addEventListener('input', (e) => {
       if (activeFile) {
         activeFile.content = e.target.value;
-        ui.state.writeFile(activeFile.path, activeFile.content);
+        try {
+          Astra.syscall('fs:write', activeFile.path, activeFile.content);
+        } catch (err) {
+          ui.showToast('Write Error', err.message, 'error');
+        }
       }
+    });
+
+    // Run Script
+    container.querySelector('#editor-run')?.addEventListener('click', () => {
+      if (!activeFile) return;
+      const cmd = `node ${activeFile.path}`;
+      ui.openApp('terminal');
+      setTimeout(() => {
+        if (window.AstraApps.terminalExecute) {
+          window.AstraApps.terminalExecute(cmd);
+        }
+      }, 200);
+    });
+
+    // Format Code
+    container.querySelector('#editor-format')?.addEventListener('click', () => {
+      if (!activeFile) return;
+      
+      let formatted = activeFile.content;
+      if (activeFile.name.endsWith('.json')) {
+        try {
+          formatted = JSON.stringify(JSON.parse(activeFile.content), null, 2);
+        } catch (e) {
+          formatted = formatCode(activeFile.content);
+        }
+      } else {
+        formatted = formatCode(activeFile.content);
+      }
+      
+      activeFile.content = formatted;
+      const tx = container.querySelector('#editor-content');
+      if (tx) tx.value = formatted;
+      try {
+        Astra.syscall('fs:write', activeFile.path, formatted);
+      } catch (err) {
+        ui.showToast('Write Error', err.message, 'error');
+      }
+      ui.showToast('Formatted Code', activeFile.name, 'success');
+      renderEditor();
     });
   }
 
@@ -298,23 +545,32 @@ window.AstraApps.editor = function(container, ui) {
 // MEMORY GRAPH
 // ==========================================
 window.AstraApps.memory = function(container, ui) {
+  let searchQuery = '';
+
   function renderGraph() {
     const { nodes, links } = ui.state.memoryGraph;
     const svgW = 600, svgH = 400;
     const typeColors = { user: '#a855f7', project: '#3b82f6', tech: '#10b981', preference: '#f59e0b', file: '#6366f1', event: '#ef4444', default: '#94a3b8' };
 
+    const activeSearch = searchQuery.toLowerCase().trim();
+
     const linksHTML = links.map(l => {
       const src = nodes.find(n => n.id === l.source);
       const tgt = nodes.find(n => n.id === l.target);
       if (!src || !tgt) return '';
-      return '<line class="edge" x1="' + src.x + '" y1="' + src.y + '" x2="' + tgt.x + '" y2="' + tgt.y + '"/>';
+      const isHighlighted = activeSearch ? (src.label.toLowerCase().includes(activeSearch) || tgt.label.toLowerCase().includes(activeSearch)) : false;
+      const opacity = activeSearch ? (isHighlighted ? '1' : '0.15') : '0.4';
+      return `<line class="edge" x1="${src.x}" y1="${src.y}" x2="${tgt.x}" y2="${tgt.y}" style="opacity: ${opacity}; transition: opacity 0.2s;" />`;
     }).join('');
 
     const nodesHTML = nodes.map(n => {
       const color = Reflect.get(typeColors, n.type) || typeColors.default;
       const cleanLabel = n.label.length > 20 ? n.label.substring(0, 18) + '…' : n.label;
+      const isMatched = activeSearch ? n.label.toLowerCase().includes(activeSearch) || n.type.toLowerCase().includes(activeSearch) : true;
+      const opacity = isMatched ? '1' : '0.2';
+      const glow = (activeSearch && isMatched) ? `stroke: var(--color-primary); stroke-width: 3px; filter: drop-shadow(0 0 8px var(--color-primary));` : '';
       return `
-        <g class="node" transform="translate(${n.x}, ${n.y})">
+        <g class="node" transform="translate(${n.x}, ${n.y})" style="opacity: ${opacity}; transition: opacity 0.2s; ${glow}">
           <circle r="24" fill="${color}" opacity="0.3" stroke="${color}" stroke-width="2"/>
           <circle r="6" fill="${color}"/>
           <text dy="36" font-size="9" fill="white" text-anchor="middle">${cleanLabel}</text>
@@ -326,18 +582,133 @@ window.AstraApps.memory = function(container, ui) {
       <div class="memory-app">
         <div class="memory-header-row">
           <div><strong>Memory Graph</strong> <span style="color: var(--text-muted); font-size: 12px">${nodes.length} nodes, ${links.length} links</span></div>
-          <button class="btn btn-secondary" id="mem-clear">Clear Graph</button>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" class="memory-search-input" id="mem-search" placeholder="Search node..." value="${window.escapeHTML(searchQuery)}" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 8px; font-size: 11px; outline: none; width: 120px;" />
+            <button class="btn btn-secondary" id="mem-clear" style="padding: 4px 8px; font-size: 11px;">Clear</button>
+          </div>
         </div>
-        <div class="memory-visualizer">
-          <svg class="graph-svg" viewBox="0 0 ${svgW} ${svgH}">
-            ${linksHTML}
-            ${nodesHTML}
-          </svg>
+        <div class="memory-main-layout" style="display: flex; flex-grow: 1; overflow: hidden; height: calc(100% - 40px);">
+          <div class="memory-sidebar" style="width: 200px; border-right: 1px solid var(--border-glass); padding: 12px; display: flex; flex-direction: column; gap: 10px; background: rgba(0,0,0,0.1); overflow-y: auto;">
+            <div style="font-size: 11px; font-weight: 700; color: var(--color-primary); text-transform: uppercase; letter-spacing: 0.5px;">Add Node</div>
+            <div class="mem-form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label style="font-size: 10px; color: var(--text-muted);">Node ID</label>
+              <input type="text" id="mem-node-id" placeholder="e.g. tech-rust" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 8px; font-size: 11px; outline: none;" />
+            </div>
+            <div class="mem-form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label style="font-size: 10px; color: var(--text-muted);">Label</label>
+              <input type="text" id="mem-node-label" placeholder="e.g. Rust Compiler" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 8px; font-size: 11px; outline: none;" />
+            </div>
+            <div class="mem-form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label style="font-size: 10px; color: var(--text-muted);">Type</label>
+              <select id="mem-node-type" style="background: rgba(18, 33, 49, 0.95); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 6px; font-size: 11px; outline: none;">
+                <option value="tech">Technology</option>
+                <option value="project">Project</option>
+                <option value="file">File</option>
+                <option value="user">User</option>
+                <option value="preference">Preference</option>
+                <option value="event">Event</option>
+              </select>
+            </div>
+            
+            <div style="border-top: 1px solid var(--border-glass); margin: 6px 0;"></div>
+            
+            <div style="font-size: 11px; font-weight: 700; color: var(--color-primary); text-transform: uppercase; letter-spacing: 0.5px;">Link (Optional)</div>
+            <div class="mem-form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label style="font-size: 10px; color: var(--text-muted);">Connect to</label>
+              <select id="mem-link-target" style="background: rgba(18, 33, 49, 0.95); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 6px; font-size: 11px; outline: none;">
+                <option value="">(None)</option>
+                ${nodes.map(n => `<option value="${n.id}">${window.escapeHTML(n.label)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="mem-form-group" style="display: flex; flex-direction: column; gap: 4px;">
+              <label style="font-size: 10px; color: var(--text-muted);">Relation</label>
+              <input type="text" id="mem-link-relation" placeholder="e.g. requires" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 8px; font-size: 11px; outline: none;" />
+            </div>
+            <button class="btn btn-primary" id="mem-submit" style="padding: 6px; margin-top: 6px; font-size: 11px;">Create Node</button>
+          </div>
+          <div class="memory-visualizer" style="flex-grow: 1; display: flex; align-items: center; justify-content: center; position: relative;">
+            <svg class="graph-svg" viewBox="0 0 ${svgW} ${svgH}" style="width: 100%; height: 100%;">
+              ${linksHTML}
+              ${nodesHTML}
+            </svg>
+          </div>
         </div>
       </div>
     `);
-    container.querySelector('#mem-clear')?.addEventListener('click', () => { ui.state.clearMemoryGraph(); renderGraph(); });
+
+    // Bind search query input
+    container.querySelector('#mem-search')?.addEventListener('input', (e) => {
+      searchQuery = e.target.value;
+      const activeSearch = searchQuery.toLowerCase().trim();
+      const nodesDOM = container.querySelectorAll('g.node');
+      const edgesDOM = container.querySelectorAll('line.edge');
+      
+      nodesDOM.forEach((nodeG, idx) => {
+        const node = nodes[idx];
+        if (!node) return;
+        const isMatched = activeSearch ? node.label.toLowerCase().includes(activeSearch) || node.type.toLowerCase().includes(activeSearch) : true;
+        
+        if (activeSearch && isMatched) {
+          nodeG.setAttribute('style', `opacity: 1; transition: opacity 0.2s; filter: drop-shadow(0 0 8px var(--color-primary));`);
+        } else {
+          nodeG.setAttribute('style', `opacity: ${isMatched ? '1' : '0.2'}; transition: opacity 0.2s;`);
+        }
+      });
+      
+      edgesDOM.forEach((edgeLine, idx) => {
+        const link = links[idx];
+        if (!link) return;
+        const src = nodes.find(n => n.id === link.source);
+        const tgt = nodes.find(n => n.id === link.target);
+        if (!src || !tgt) return;
+        const isHighlighted = activeSearch ? (src.label.toLowerCase().includes(activeSearch) || tgt.label.toLowerCase().includes(activeSearch)) : false;
+        edgeLine.style.opacity = activeSearch ? (isHighlighted ? '1' : '0.15') : '0.4';
+      });
+    });
+
+    // Keep input cursor at end if focused
+    const searchInput = container.querySelector('#mem-search');
+    if (searchInput && document.activeElement === searchInput) {
+      searchInput.focus();
+      const len = searchInput.value.length;
+      searchInput.setSelectionRange(len, len);
+    }
+
+    // Bind Clear button
+    container.querySelector('#mem-clear')?.addEventListener('click', () => {
+      ui.state.clearMemoryGraph();
+      renderGraph();
+    });
+
+    // Bind Submit button
+    container.querySelector('#mem-submit')?.addEventListener('click', () => {
+      const nodeId = container.querySelector('#mem-node-id')?.value.trim();
+      const nodeLabel = container.querySelector('#mem-node-label')?.value.trim();
+      const nodeType = container.querySelector('#mem-node-type')?.value;
+      const linkTarget = container.querySelector('#mem-link-target')?.value;
+      const linkRelation = container.querySelector('#mem-link-relation')?.value.trim() || 'connects';
+      
+      if (!nodeId || !nodeLabel) {
+        ui.showToast('Validation Error', 'ID and Label are required', 'error');
+        return;
+      }
+      
+      if (ui.state.memoryGraph.nodes.some(n => n.id === nodeId)) {
+        ui.showToast('Error', 'Node ID already exists', 'error');
+        return;
+      }
+      
+      ui.state.addMemoryNode(nodeId, nodeLabel, nodeType);
+      
+      if (linkTarget) {
+        ui.state.addMemoryLink(nodeId, linkTarget, linkRelation);
+      }
+      
+      ui.showToast('Node Created', nodeLabel, 'success');
+      renderGraph();
+    });
   }
+
   renderGraph();
 };
 
@@ -454,7 +825,73 @@ window.AstraApps.terminal = function(container, ui) {
   }
 
   function processCommand(rawCmd) {
-    const res = window.AstraKernel.executeCommand(rawCmd, currentDir, commandHistory);
+    // Detect background execution suffix (&)
+    let isBackground = false;
+    let cleanCmd = rawCmd;
+    if (rawCmd.trimEnd().endsWith('&') && !rawCmd.trimEnd().endsWith('&&')) {
+      isBackground = true;
+      cleanCmd = rawCmd.trimEnd().slice(0, -1).trim();
+    }
+
+    const res = window.AstraKernel.executeCommand(cleanCmd, currentDir, commandHistory);
+    
+    const afterExecute = (finalRes) => {
+      if (finalRes.newDir) {
+        currentDir = finalRes.newDir;
+      }
+      const prompt = container.querySelector('.terminal-prompt');
+      if (prompt) {
+        prompt.textContent = `${ui.state.currentSession.currentUser || 'divyanshu'}@astra:${shortPath(currentDir)}$`;
+      }
+      if (finalRes.action === 'reset') {
+        setTimeout(() => { ui.state.resetAllState(); location.reload(); }, 1000);
+      } else if (finalRes.action === 'agent-run') {
+        setTimeout(() => {
+          if (window.triggerAgentWorkflow) {
+            window.triggerAgentWorkflow();
+          }
+        }, 1000);
+      }
+      if (finalRes.toast) {
+        ui.showToast(finalRes.toast.title, finalRes.toast.message, finalRes.toast.type);
+      }
+      if (window.refreshExplorerGrid) {
+        window.refreshExplorerGrid();
+      }
+    };
+
+    // Background job execution — run async commands without blocking the terminal
+    if (isBackground && res.async) {
+      const job = window.AstraKernel.createJob(cleanCmd);
+      addOutput(`[${job.id}] Background job started: ${cleanCmd}`, 'info');
+
+      res.run((text, cls) => {
+        if (job.foreground) {
+          // Job was foregrounded — redirect output to terminal
+          addOutput(text, cls);
+        } else {
+          job.outputBuffer.push(text);
+        }
+      }).then(() => {
+        job.status = 'Done';
+        if (!job.foreground) {
+          addOutput(`[${job.id}]  Done                    ${cleanCmd}`, 'info');
+        }
+      }).catch(() => {
+        job.status = 'Failed';
+      });
+
+      afterExecute(res);
+      return;
+    }
+
+    if (res.async) {
+      res.run((text, cls) => addOutput(text, cls)).then(() => {
+        afterExecute(res);
+      });
+      return;
+    }
+
     if (res.action === 'clear') {
       const outEl = container.querySelector('#term-out');
       if (outEl) window.renderSafeHTML(outEl, '');
@@ -463,26 +900,16 @@ window.AstraApps.terminal = function(container, ui) {
         addOutputLines(res.output, res.cls || '');
       }
     }
-    if (res.newDir) {
-      currentDir = res.newDir;
+
+    // Handle fg live output redirection
+    if (res.foregroundJobId) {
+      const job = window.AstraKernel.getJob(res.foregroundJobId);
+      if (job) {
+        job.foreground = true;
+      }
     }
-    // Always refresh prompt in case directory or current user changes (e.g. su switch)
-    const prompt = container.querySelector('.terminal-prompt');
-    if (prompt) {
-      prompt.textContent = `${ui.state.currentSession.currentUser || 'divyanshu'}@astra:${shortPath(currentDir)}$`;
-    }
-    if (res.action === 'reset') {
-      setTimeout(() => { ui.state.resetAllState(); location.reload(); }, 1000);
-    } else if (res.action === 'agent-run') {
-      setTimeout(() => {
-        if (window.triggerAgentWorkflow) {
-          window.triggerAgentWorkflow();
-        }
-      }, 1000);
-    }
-    if (res.toast) {
-      ui.showToast(res.toast.title, res.toast.message, res.toast.type);
-    }
+
+    afterExecute(res);
   }
 
   render();
@@ -502,25 +929,106 @@ window.AstraApps.tasks = function(container, ui) {
       <div class="tasks-app">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px">
           <h3 style="font-size: 15px; font-weight: 600">Agent Task Board</h3>
-          <span style="font-size: 12px; color: var(--text-muted)">${tasks.length} total tasks</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button class="btn btn-secondary" id="btn-add-task" style="padding: 4px 8px; font-size: 11px;">+ Add Task</button>
+            <span style="font-size: 12px; color: var(--text-muted)">${tasks.length} total tasks</span>
+          </div>
         </div>
         <div class="tasks-grid">
-          ${renderColumn('Pending', pending, '#f59e0b')}
-          ${renderColumn('In Progress', inProgress, '#3b82f6')}
-          ${renderColumn('Completed', completed, '#10b981')}
+          ${renderColumn('pending', 'Pending', pending, '#f59e0b')}
+          ${renderColumn('progress', 'In Progress', inProgress, '#3b82f6')}
+          ${renderColumn('completed', 'Completed', completed, '#10b981')}
         </div>
       </div>
     `);
+
+    // Bind Add Task Button
+    container.querySelector('#btn-add-task')?.addEventListener('click', () => {
+      const title = prompt('Task Title:');
+      if (!title || !title.trim()) return;
+      const desc = prompt('Task Description:') || '';
+      const assigned = prompt('Assigned Agent (e.g. PlannerAgent, ExecutorAgent, User):') || 'User';
+      
+      if (ui.state.addTask) {
+        ui.state.addTask(title.trim(), desc.trim(), 'pending', assigned.trim());
+      } else {
+        const id = 'task-' + Date.now();
+        ui.state.agentTasks.push({ id, title: title.trim(), desc: desc.trim(), status: 'pending', assigned: assigned.trim() });
+        ui.state.addAuditLog('User', `Added task: [${title.trim()}]`);
+        ui.state.saveState();
+      }
+      ui.showToast('Task Added', title.trim(), 'success');
+      
+      if (window.updateDashboardStats) window.updateDashboardStats();
+      renderBoard();
+    });
+
+    // Bind Move Buttons
+    container.querySelectorAll('.task-card-move-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        const nextStatus = btn.getAttribute('data-action');
+        ui.state.updateTaskStatus(id, nextStatus);
+        
+        if (window.updateDashboardStats) window.updateDashboardStats();
+        renderBoard();
+      });
+    });
+
+    // Bind Delete Buttons
+    container.querySelectorAll('.task-card-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        if (ui.state.deleteTask) {
+          ui.state.deleteTask(id);
+        } else {
+          const idx = ui.state.agentTasks.findIndex(t => t.id === id);
+          if (idx !== -1) {
+            const task = ui.state.agentTasks[idx];
+            ui.state.agentTasks.splice(idx, 1);
+            ui.state.addAuditLog('User', `Deleted task: [${task.title}]`);
+            ui.state.saveState();
+          }
+        }
+        ui.showToast('Task Deleted', '', 'info');
+        
+        if (window.updateDashboardStats) window.updateDashboardStats();
+        renderBoard();
+      });
+    });
   }
 
-  function renderColumn(title, items, color) {
-    const cardsHTML = items.map(t => `
-      <div class="task-card-ui" data-id="${window.escapeHTML(t.id)}">
-        <div class="task-card-title">${window.escapeHTML(t.title)}</div>
-        <div class="task-card-desc">${window.escapeHTML(t.desc)}</div>
-        <div class="task-card-badge">${t.assigned}</div>
-      </div>
-    `).join('');
+  function renderColumn(colId, title, items, color) {
+    const cardsHTML = items.map(t => {
+      let moveLeft = '';
+      let moveRight = '';
+      
+      if (colId === 'pending') {
+        moveRight = `<button class="task-card-move-btn" data-id="${t.id}" data-action="progress" title="Move to In Progress">▶</button>`;
+      } else if (colId === 'progress') {
+        moveLeft = `<button class="task-card-move-btn" data-id="${t.id}" data-action="pending" title="Move to Pending">◀</button>`;
+        moveRight = `<button class="task-card-move-btn" data-id="${t.id}" data-action="completed" title="Move to Completed">▶</button>`;
+      } else if (colId === 'completed') {
+        moveLeft = `<button class="task-card-move-btn" data-id="${t.id}" data-action="progress" title="Move to In Progress">◀</button>`;
+      }
+      
+      return `
+        <div class="task-card-ui" data-id="${window.escapeHTML(t.id)}">
+          <div class="task-card-header">
+            <div class="task-card-title">${window.escapeHTML(t.title)}</div>
+            <button class="task-card-delete-btn" data-id="${t.id}" title="Delete Task">✕</button>
+          </div>
+          <div class="task-card-desc">${window.escapeHTML(t.desc)}</div>
+          <div class="task-card-footer">
+            <div class="task-card-badge">${t.assigned}</div>
+            <div class="task-card-moves">
+              ${moveLeft}
+              ${moveRight}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
 
     return `
       <div class="tasks-column">

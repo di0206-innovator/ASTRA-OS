@@ -23,6 +23,77 @@ export class UIController {
     this.contextMenuVisible = false;
     this.inactivityTimer = null;
     this.lastActivity = Date.now();
+    this.appTimers = {};
+    this.setupTimerInterceptors();
+  }
+
+  setupTimerInterceptors() {
+    const self = this;
+    const originalSetTimeout = window.setTimeout;
+    const originalSetInterval = window.setInterval;
+    const originalClearTimeout = window.clearTimeout;
+    const originalClearInterval = window.clearInterval;
+
+    window.setTimeout = function(callback, delay, ...args) {
+      const activeApp = self.state.activeWindow;
+      const id = originalSetTimeout(callback, delay, ...args);
+      if (activeApp) {
+        self.registerAppTimer(activeApp, id, 'timeout');
+      }
+      return id;
+    };
+
+    window.setInterval = function(callback, delay, ...args) {
+      const activeApp = self.state.activeWindow;
+      const id = originalSetInterval(callback, delay, ...args);
+      if (activeApp) {
+        self.registerAppTimer(activeApp, id, 'interval');
+      }
+      return id;
+    };
+
+    window.clearTimeout = function(id) {
+      originalClearTimeout(id);
+      self.unregisterAppTimer(id, 'timeout');
+    };
+
+    window.clearInterval = function(id) {
+      originalClearInterval(id);
+      self.unregisterAppTimer(id, 'interval');
+    };
+  }
+
+  registerAppTimer(appId, id, type) {
+    if (!this.appTimers[appId]) {
+      this.appTimers[appId] = { timeouts: new Set(), intervals: new Set() };
+    }
+    if (type === 'timeout') {
+      this.appTimers[appId].timeouts.add(id);
+    } else {
+      this.appTimers[appId].intervals.add(id);
+    }
+  }
+
+  unregisterAppTimer(id, type) {
+    for (const appId in this.appTimers) {
+      const record = this.appTimers[appId];
+      if (type === 'timeout' && record.timeouts.has(id)) {
+        record.timeouts.delete(id);
+        break;
+      } else if (type === 'interval' && record.intervals.has(id)) {
+        record.intervals.delete(id);
+        break;
+      }
+    }
+  }
+
+  clearAppTimers(appId) {
+    const record = this.appTimers[appId];
+    if (record) {
+      record.timeouts.forEach(id => window.clearTimeout(id));
+      record.intervals.forEach(id => window.clearInterval(id));
+      delete this.appTimers[appId];
+    }
   }
 
   init() {
@@ -694,9 +765,18 @@ export class UIController {
     const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
     if (!proc) return;
     const win = document.querySelector(`.window[data-app="${window.escapeHTML(appId)}"]`);
-    if (win) win.classList.add('hidden');
+    if (win) {
+      win.classList.add('hidden');
+      const body = win.querySelector('.window-body');
+      if (body) {
+        window.renderSafeHTML(body, '');
+      }
+    }
     proc.open = false;
     proc.minimized = false;
+
+    // Clear registered app timers
+    this.clearAppTimers(appId);
 
     // Kill process
     const kernel = window.AstraKernel;

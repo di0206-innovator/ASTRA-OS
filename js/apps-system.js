@@ -173,8 +173,36 @@ window.AstraApps.sysmonitor = function(container, ui) {
     window.renderSafeHTML(el, `
       <div class="disk-partitions">
         ${diskPartsHTML}
+        <div class="disk-part-card" style="border-left: 2px solid var(--color-cyan)">
+          <div class="disk-part-header">
+            <span class="disk-part-name">🌐 IndexedDB Virtual Volume</span>
+            <span class="disk-part-mount">/dev/vdb — IndexedDB</span>
+          </div>
+          <div class="disk-bar-bg"><div class="disk-bar-fill" id="idb-usage-fill" style="width: 0%; background: var(--color-cyan)"></div></div>
+          <div class="disk-part-info" id="idb-usage-text">Loading IndexedDB storage stats...</div>
+        </div>
       </div>
     `);
+
+    if (navigator.storage && navigator.storage.estimate) {
+      navigator.storage.estimate().then(est => {
+        const fill = el.querySelector('#idb-usage-fill');
+        const text = el.querySelector('#idb-usage-text');
+        if (fill && text) {
+          const pct = est.quota ? Math.max(1, Math.floor((est.usage / est.quota) * 100)) : 0;
+          const usedMB = (est.usage / (1024 * 1024)).toFixed(1);
+          const quotaMB = (est.quota / (1024 * 1024)).toFixed(1);
+          fill.style.width = `${pct}%`;
+          text.textContent = `${usedMB} MB / ${quotaMB} MB (${pct}%) — 🟢 Active (Astra Database)`;
+        }
+      }).catch(err => {
+        const text = el.querySelector('#idb-usage-text');
+        if (text) text.textContent = `Error: ${err.message}`;
+      });
+    } else {
+      const text = el.querySelector('#idb-usage-text');
+      if (text) text.textContent = `Estimation API not supported — 🟢 Connected`;
+    }
   }
 
   const closeBtn = container.closest('.window')?.querySelector('.dot-close');

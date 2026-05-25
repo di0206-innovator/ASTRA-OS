@@ -12,22 +12,28 @@
   --hue-secondary: 160; /* Emerald (Status Green) */
   
   --color-purple: hsl(var(--hue-primary), 86%, 54%); /* Electric Cyan primary */
+  --color-primary: var(--color-purple);
+  --color-primary-rgb: 34, 211, 238;
   --color-blue: hsl(220, 85%, 55%); /* Blue */
   --color-amber: hsl(35, 90%, 55%);
   --color-green: hsl(var(--hue-secondary), 80%, 45%); /* Emerald */
   --color-red: hsl(0, 80%, 55%);
 
   --bg-deep: #051424; /* Deep Midnight Navy */
-  --bg-glass: rgba(18, 33, 49, 0.65); /* Translucent Slate */
+  --bg-glass: rgba(18, 33, 49, 0.7); /* Translucent Slate */
   --bg-glass-active: rgba(28, 43, 60, 0.85);
   --bg-glass-light: rgba(255, 255, 255, 0.04);
   
-  --border-glass: rgba(255, 255, 255, 0.06);
-  --border-glass-focus: rgba(34, 211, 238, 0.3); /* Electric Cyan highlight */
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --border-glass-focus: rgba(34, 211, 238, 0.45); /* Electric Cyan highlight */
   
   --text-primary: #d4e4fa; /* Off-white on-surface */
   --text-secondary: #bbc9cd; /* Muted slate */
   --text-muted: #859397; /* Outline gray */
+
+  /* Corner Radii */
+  --radius-base: 4px;
+  --radius-container: 12px;
 
   /* Elevation */
   --shadow-window: 0 20px 40px -10px rgba(0, 0, 0, 0.6), 
@@ -340,7 +346,7 @@ body:not(.sidebar-collapsed) .desktop {
   background-color: var(--bg-glass);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border-radius: 12px;
+  border-radius: var(--radius-container);
   box-shadow: var(--shadow-window);
   display: flex;
   flex-direction: column;
@@ -907,6 +913,11 @@ dialog::backdrop {
 }
 
 /* Safety Dialog */
+@keyframes dialog-appear {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
 .safety-approval-dialog {
   position: fixed;
   top: 50%;
@@ -915,6 +926,7 @@ dialog::backdrop {
   width: 500px;
   max-width: 90%;
   z-index: 1002;
+  animation: dialog-appear 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .safety-dialog-content {
@@ -922,7 +934,7 @@ dialog::backdrop {
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
   border: 1px solid hsla(35, 90%, 55%, 0.4);
-  border-radius: 16px;
+  border-radius: var(--radius-container);
   box-shadow: var(--shadow-window);
   padding: 24px;
   display: flex;
@@ -1000,13 +1012,13 @@ dialog::backdrop {
 
 .btn {
   padding: 8px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-base);
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   border: none;
-  transition: transform 0.1s, filter 0.1s;
+  transition: transform 0.1s, filter 0.1s, box-shadow 0.1s;
 }
 
 .btn:active {
@@ -1014,22 +1026,23 @@ dialog::backdrop {
 }
 
 .btn-primary {
-  background-color: var(--color-purple);
-  color: white;
+  background-color: var(--color-primary);
+  color: var(--bg-deep);
 }
 
 .btn-primary:hover {
   filter: brightness(1.1);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.55);
 }
 
 .btn-secondary {
-  background-color: var(--bg-glass-light);
-  color: var(--text-primary);
-  border: 1px solid var(--border-glass);
+  background-color: transparent;
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
 }
 
 .btn-secondary:hover {
-  background-color: hsla(0,0%,100%,0.1);
+  background-color: rgba(34, 211, 238, 0.15);
 }
 
 .btn-text-action {
@@ -4085,6 +4098,125 @@ dialog::backdrop {
   background: var(--color-primary) !important;
   border-color: var(--color-primary) !important;
   box-shadow: 0 0 10px var(--color-primary);
+}
+
+/* ==========================================
+   Astra OS Redesign Custom App Extensions
+   ========================================== */
+
+/* File Explorer extensions */
+.explorer-search {
+  background-color: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-base);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  outline: none;
+  width: 140px;
+  margin-left: auto;
+  margin-right: 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.explorer-search:focus {
+  border-color: var(--border-glass-focus);
+  box-shadow: 0 0 5px rgba(34, 211, 238, 0.35);
+}
+
+/* Code Editor extensions */
+.editor-tb-btn {
+  background-color: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  border-radius: var(--radius-base);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+}
+.editor-tb-btn:hover:not(:disabled) {
+  border-color: var(--border-glass-focus);
+  background-color: rgba(34, 211, 238, 0.15);
+  color: var(--color-primary);
+}
+.editor-tb-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Tasks Kanban board extensions */
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+.task-card-delete-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--radius-base);
+  transition: color 0.15s, background-color 0.15s;
+}
+.task-card-delete-btn:hover {
+  color: var(--color-red);
+  background-color: rgba(239, 68, 68, 0.15);
+}
+.task-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+}
+.task-card-moves {
+  display: flex;
+  gap: 4px;
+}
+.task-card-move-btn {
+  background-color: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  color: var(--text-secondary);
+  border-radius: var(--radius-base);
+  width: 20px;
+  height: 20px;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.task-card-move-btn:hover {
+  border-color: var(--border-glass-focus);
+  color: var(--color-primary);
+}
+
+/* Memory Graph custom style adjustments */
+.memory-search-input {
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.memory-search-input:focus {
+  border-color: var(--border-glass-focus) !important;
+  box-shadow: 0 0 5px rgba(34, 211, 238, 0.35) !important;
+}
+.memory-sidebar label {
+  font-weight: 600;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+.memory-sidebar input, .memory-sidebar select {
+  transition: border-color 0.15s;
+}
+.memory-sidebar input:focus, .memory-sidebar select:focus {
+  border-color: var(--border-glass-focus) !important;
 }
 
 
