@@ -957,7 +957,10 @@ export class OSState {
   copyFile(srcPath, dstPath) {
     const srcNode = this.resolvePath(srcPath);
     if (!srcNode || srcNode.type !== 'file') return false;
-    if (!this.canReadNode(srcNode) || !this.canModifyNode(this.resolvePath(dstPath)?.parent || srcNode)) return false;
+    const dstParts = dstPath.replace(/^\//, '').split('/').filter(Boolean);
+    const dstParentPath = dstParts.length > 1 ? `/${dstParts.slice(0, -1).join('/')}` : '/';
+    const dstParent = this.resolvePath(dstParentPath);
+    if (!this.canReadNode(srcNode) || !this.canModifyNode(dstParent || srcNode)) return false;
     this.writeFile(dstPath, srcNode.content);
     return true;
   }

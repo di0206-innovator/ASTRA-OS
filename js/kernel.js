@@ -1447,6 +1447,14 @@ export class Kernel {
     let action = '';
     let toast = null;
 
+    if (cmd === 'true') {
+      return { output: [], cls: 'success' };
+    }
+
+    if (cmd === 'false') {
+      return { output: [], cls: 'error' };
+    }
+
     if (cmd === 'sudo') {
       const user = this.state.users.find(u => u.username === this.state.currentSession.currentUser);
       if (!user || user.role !== 'admin') return { output: ['sudo: permission denied'], cls: 'error' };
@@ -2091,6 +2099,12 @@ export class Kernel {
         }
         break;
       }
+      case 'true':
+        cls = 'success';
+        break;
+      case 'false':
+        cls = 'error';
+        break;
       case 'neofetch':
         if (!this.isPackageInstalled('neofetch')) {
           output.push('neofetch: command not found. Install with: apt install neofetch');
