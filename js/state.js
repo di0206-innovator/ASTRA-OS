@@ -44,7 +44,7 @@ export class OSState {
     };
 
     this.initializeState();
-    this.initIndexedDB();
+    this.dbLoaded = this.initIndexedDB();
   }
 
   initIndexedDB() {

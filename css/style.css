@@ -2931,6 +2931,12 @@ dialog::backdrop {
   color: var(--text-primary);
 }
 
+.explorer-fav-item.active {
+  background-color: var(--bg-glass-active);
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
 .explorer-main-v2 {
   padding: 16px;
   display: grid;

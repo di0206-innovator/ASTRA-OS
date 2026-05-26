@@ -866,12 +866,24 @@ export class Kernel {
   restoreFromTrash(index) {
     if (index < 0 || index >= this.state.trash.length) return false;
     const item = Reflect.get(this.state.trash, index);
-    // Re-write the file
-    if (item.node.type === 'file') {
-      this.state.writeFile(item.path, item.node.content);
+    const parts = item.path.replace(/^\//, '').split('/').filter(Boolean);
+    const nodeName = window.sanitizeKey(parts.pop());
+    if (!nodeName) return false;
+    let current = this.state.fs['root'];
+    for (const part of parts) {
+      const safePart = window.sanitizeKey(part);
+      if (!safePart) return false;
+      if (!current.children[safePart]) {
+        current.children[safePart] = { type: 'dir', name: safePart, children: {}, owner: this.state.currentSession.currentUser || 'divyanshu', group: 'staff', permissions: 'rwxr-xr-x' };
+      }
+      current = current.children[safePart];
     }
+    item.node.name = nodeName;
+    current.children[nodeName] = item.node;
+    
     this.state.trash.splice(index, 1);
     this.syslog('INFO', 'fs', `Restored from trash: ${item.path}`);
+    window.AstraBus?.emit('fs.changed', { path: item.path, action: 'Restored from trash' });
     this.state.saveState();
     return true;
   }

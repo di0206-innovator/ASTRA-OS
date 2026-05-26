@@ -13,11 +13,24 @@ window.AstraApps.explorer = function(container, ui) {
   let searchTerm = '';
 
   function render() {
-    const dir = ui.state.resolvePath(currentPath);
-    if (!dir || dir.type !== 'dir') { currentPath = '/'; render(); return; }
+    const state = ui.state;
+    const isTrashView = currentPath === 'trash://';
+    let entries = [];
 
-    const pathParts = currentPath.split('/').filter(Boolean);
-    let entries = Object.keys(dir.children || {}).map(name => ({ name, ...Reflect.get(dir.children, window.sanitizeKey(name)) }));
+    if (isTrashView) {
+      entries = (state.trash || []).map((item, index) => ({
+        name: item.path.split('/').pop() || item.path,
+        type: item.node.type,
+        trashIndex: index,
+        originalPath: item.path,
+        deletedAt: item.deletedAt,
+        content: item.node.content || ''
+      }));
+    } else {
+      const dir = state.resolvePath(currentPath);
+      if (!dir || dir.type !== 'dir') { currentPath = '/'; render(); return; }
+      entries = Object.keys(dir.children || {}).map(name => ({ name, ...Reflect.get(dir.children, window.sanitizeKey(name)) }));
+    }
     
     // Apply search filter if active
     if (searchTerm.trim()) {
@@ -27,7 +40,7 @@ window.AstraApps.explorer = function(container, ui) {
 
     let explorerGridHTML = '';
     if (entries.length === 0) {
-      explorerGridHTML = `<div class="explorer-empty">${searchTerm.trim() ? 'No matching files' : 'This folder is empty'}</div>`;
+      explorerGridHTML = `<div class="explorer-empty">${searchTerm.trim() ? 'No matching files' : (isTrashView ? 'Trash Bin is empty' : 'This folder is empty')}</div>`;
     } else {
       entries.forEach(e => {
         const selectedClass = selectedItem === e.name ? 'selected' : '';
@@ -36,34 +49,42 @@ window.AstraApps.explorer = function(container, ui) {
         explorerGridHTML += `
           <div class="explorer-item-v2 ${selectedClass}" data-name="${window.escapeHTML(e.name)}" data-type="${window.escapeHTML(e.type)}">
             <div class="explorer-item-icon">${icon}</div>
-            <div class="explorer-item-name">${window.escapeHTML(e.name)}</div>
+            <div class="explorer-item-name" title="${isTrashView ? 'Original Path: ' + window.escapeHTML(e.originalPath) : window.escapeHTML(e.name)}">${window.escapeHTML(e.name)}</div>
             ${sizeHTML}
           </div>
         `;
       });
     }
 
-    const breadcrumbHTML = pathParts.map((p, i) => {
-      const path = '/' + pathParts.slice(0, i + 1).join('/');
-      return '<span class="breadcrumb-sep">/</span><span class="breadcrumb-part" data-path="' + path + '">' + window.escapeHTML(p) + '</span>';
-    }).join('');
+    const pathParts = isTrashView ? [] : currentPath.split('/').filter(Boolean);
+    const breadcrumbHTML = isTrashView 
+      ? '<span class="breadcrumb-sep">/</span><span class="breadcrumb-part" data-path="trash://">Trash Bin</span>'
+      : pathParts.map((p, i) => {
+          const path = '/' + pathParts.slice(0, i + 1).join('/');
+          return '<span class="breadcrumb-sep">/</span><span class="breadcrumb-part" data-path="' + path + '">' + window.escapeHTML(p) + '</span>';
+        }).join('');
 
     window.renderSafeHTML(container, `
       <div class="explorer-app-v2">
         <div class="explorer-toolbar">
-          <button class="explorer-tb-btn" id="exp-back" title="Back">◀</button>
+          <button class="explorer-tb-btn" id="exp-back" title="Back" ${isTrashView ? 'disabled' : ''}>◀</button>
           <div class="explorer-breadcrumb">
-            <span class="breadcrumb-part" data-path="/">/</span>
+            ${isTrashView ? '' : '<span class="breadcrumb-part" data-path="/">/</span>'}
             ${breadcrumbHTML}
           </div>
           <input type="text" class="explorer-search" id="exp-search" placeholder="Search..." value="${window.escapeHTML(searchTerm)}">
           <div class="explorer-tb-actions">
-            <button class="explorer-tb-btn" id="exp-newfolder" title="New Folder">📁+</button>
-            <button class="explorer-tb-btn" id="exp-newfile" title="New File">📄+</button>
-            <button class="explorer-tb-btn" id="exp-copy" title="Copy" ${!selectedItem ? 'disabled' : ''}>📋</button>
-            <button class="explorer-tb-btn" id="exp-paste" title="Paste" ${!window.AstraClipboard ? 'disabled' : ''}>📥</button>
-            <button class="explorer-tb-btn" id="exp-rename" title="Rename" ${!selectedItem ? 'disabled' : ''}>✏️</button>
-            <button class="explorer-tb-btn" id="exp-delete" title="Delete" ${!selectedItem ? 'disabled' : ''}>🗑</button>
+            ${isTrashView ? `
+              <button class="explorer-tb-btn" id="exp-restore" title="Restore" ${!selectedItem ? 'disabled' : ''}>↩ Restore</button>
+              <button class="explorer-tb-btn" id="exp-empty-trash" title="Empty Trash">🗑 Empty</button>
+            ` : `
+              <button class="explorer-tb-btn" id="exp-newfolder" title="New Folder">📁+</button>
+              <button class="explorer-tb-btn" id="exp-newfile" title="New File">📄+</button>
+              <button class="explorer-tb-btn" id="exp-copy" title="Copy" ${!selectedItem ? 'disabled' : ''}>📋</button>
+              <button class="explorer-tb-btn" id="exp-paste" title="Paste" ${!window.AstraClipboard ? 'disabled' : ''}>📥</button>
+              <button class="explorer-tb-btn" id="exp-rename" title="Rename" ${!selectedItem ? 'disabled' : ''}>✏️</button>
+              <button class="explorer-tb-btn" id="exp-delete" title="Delete" ${!selectedItem ? 'disabled' : ''}>🗑</button>
+            `}
           </div>
         </div>
         <div class="explorer-sidebar-v2">
@@ -81,17 +102,28 @@ window.AstraApps.explorer = function(container, ui) {
             <div class="explorer-fav-item" data-path="/etc">⚙ /etc</div>
             <div class="explorer-fav-item" data-path="/var/log">📋 /var/log</div>
             <div class="explorer-fav-item" data-path="/tmp">🗑 /tmp</div>
+            <div class="explorer-fav-item" data-path="trash://">🗑 Trash Bin</div>
           </div>
         </div>
         <div class="explorer-main-v2" id="exp-main">
           ${explorerGridHTML}
         </div>
-        <div class="explorer-statusbar">${entries.length} items • ${currentPath}</div>
+        <div class="explorer-statusbar">${entries.length} items • ${isTrashView ? 'Trash Bin' : currentPath}</div>
       </div>
     `);
 
+    // Highlight active sidebar item
+    container.querySelectorAll('.explorer-fav-item').forEach(f => {
+      if (f.getAttribute('data-path') === currentPath) {
+        f.classList.add('active');
+      } else {
+        f.classList.remove('active');
+      }
+    });
+
     // Events
     container.querySelector('#exp-back')?.addEventListener('click', () => {
+      if (isTrashView) return;
       const parts = currentPath.split('/').filter(Boolean);
       if (parts.length > 0) { parts.pop(); currentPath = '/' + parts.join('/'); selectedItem = null; searchTerm = ''; render(); }
     });
@@ -111,6 +143,16 @@ window.AstraApps.explorer = function(container, ui) {
       item.addEventListener('dblclick', () => {
         const name = item.getAttribute('data-name');
         const type = item.getAttribute('data-type');
+        if (isTrashView) {
+          const match = entries.find(e => e.name === name);
+          if (match && window.AstraKernel) {
+            window.AstraKernel.restoreFromTrash(match.trashIndex);
+            ui.showToast('Restored File', name, 'success');
+            selectedItem = null;
+            render();
+          }
+          return;
+        }
         if (type === 'dir') { currentPath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`; selectedItem = null; searchTerm = ''; render(); }
         else {
           const filePath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
@@ -167,160 +209,195 @@ window.AstraApps.explorer = function(container, ui) {
     }
 
     // Toolbar actions
-    container.querySelector('#exp-newfolder')?.addEventListener('click', () => {
-      const name = prompt('Folder name:');
-      if (name && name.trim()) {
-        const path = currentPath === '/' ? `/${name.trim()}` : `${currentPath}/${name.trim()}`;
-        ui.state.createDir(path);
-        ui.showToast('Folder Created', name.trim(), 'success');
-        render();
-      }
-    });
-    container.querySelector('#exp-newfile')?.addEventListener('click', () => {
-      const name = prompt('File name:');
-      if (name && name.trim()) {
-        const path = currentPath === '/' ? `/${name.trim()}` : `${currentPath}/${name.trim()}`;
-        try {
-          Astra.syscall('fs:write', path, '');
-          ui.showToast('File Created', name.trim(), 'success');
+    if (isTrashView) {
+      container.querySelector('#exp-restore')?.addEventListener('click', () => {
+        if (!selectedItem) return;
+        const match = entries.find(e => e.name === selectedItem);
+        if (match && window.AstraKernel) {
+          window.AstraKernel.restoreFromTrash(match.trashIndex);
+          ui.showToast('Restored File', selectedItem, 'success');
+          selectedItem = null;
           render();
-        } catch (err) {
-          ui.showToast('Error', err.message, 'error');
         }
-      }
-    });
+      });
+      container.querySelector('#exp-empty-trash')?.addEventListener('click', () => {
+        if (confirm('Are you sure you want to permanently delete all items in Trash?')) {
+          if (window.AstraKernel) {
+            window.AstraKernel.emptyTrash();
+            ui.showToast('Trash Emptied', 'All items deleted permanently.', 'info');
+            selectedItem = null;
+            render();
+          }
+        }
+      });
+    } else {
+      container.querySelector('#exp-newfolder')?.addEventListener('click', () => {
+        const name = prompt('Folder name:');
+        if (name && name.trim()) {
+          const path = currentPath === '/' ? `/${name.trim()}` : `${currentPath}/${name.trim()}`;
+          Astra.syscall('fs:mkdir', path)
+            .then(() => {
+              ui.showToast('Folder Created', name.trim(), 'success');
+              render();
+            })
+            .catch(err => {
+              ui.showToast('Error', err.message, 'error');
+            });
+        }
+      });
+      container.querySelector('#exp-newfile')?.addEventListener('click', () => {
+        const name = prompt('File name:');
+        if (name && name.trim()) {
+          const path = currentPath === '/' ? `/${name.trim()}` : `${currentPath}/${name.trim()}`;
+          try {
+            Astra.syscall('fs:write', path, '');
+            ui.showToast('File Created', name.trim(), 'success');
+            render();
+          } catch (err) {
+            ui.showToast('Error', err.message, 'error');
+          }
+        }
+      });
+      container.querySelector('#exp-copy')?.addEventListener('click', () => {
+        if (!selectedItem) return;
+        const srcPath = currentPath === '/' ? `/${selectedItem}` : `${currentPath}/${selectedItem}`;
+        window.AstraClipboard = {
+          type: state.resolvePath(srcPath).type,
+          name: selectedItem,
+          path: srcPath
+        };
 
-    // Copy Event
-    container.querySelector('#exp-copy')?.addEventListener('click', () => {
-      if (!selectedItem) return;
-      const srcPath = currentPath === '/' ? `/${selectedItem}` : `${currentPath}/${selectedItem}`;
-      window.AstraClipboard = {
-        type: ui.state.resolvePath(srcPath).type,
-        name: selectedItem,
-        path: srcPath
-      };
-
-      const node = ui.state.resolvePath(srcPath);
-      if (node && node.type === 'file') {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(node.content || '').then(() => {
-            ui.showToast('Copied to Clipboard (Host Shared)', selectedItem, 'info');
-          }).catch(err => {
+        const node = state.resolvePath(srcPath);
+        if (node && node.type === 'file') {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(node.content || '').then(() => {
+              ui.showToast('Copied to Clipboard (Host Shared)', selectedItem, 'info');
+            }).catch(err => {
+              ui.showToast('Copied to Clipboard', selectedItem, 'info');
+            });
+          } else {
             ui.showToast('Copied to Clipboard', selectedItem, 'info');
-          });
+          }
         } else {
           ui.showToast('Copied to Clipboard', selectedItem, 'info');
         }
-      } else {
-        ui.showToast('Copied to Clipboard', selectedItem, 'info');
-      }
-      render();
-    });
-
-    // Paste Event
-    container.querySelector('#exp-paste')?.addEventListener('click', async () => {
-      let hostClipboardText = '';
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        try {
-          hostClipboardText = await navigator.clipboard.readText();
-        } catch (err) {
-          console.warn('Failed to read from host clipboard', err);
-        }
-      }
-
-      const localFileContent = window.AstraClipboard && window.AstraClipboard.path ? 
-        (ui.state.resolvePath(window.AstraClipboard.path)?.content || '') : null;
-
-      if (hostClipboardText && hostClipboardText !== localFileContent) {
-        let fileName = 'pasted_text.txt';
-        let dstPath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
-        if (ui.state.resolvePath(dstPath)) {
-          let count = 1;
-          do {
-            fileName = `pasted_text_${count}.txt`;
-            dstPath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
-            count++;
-          } while (ui.state.resolvePath(dstPath));
-        }
-        try {
-          Astra.syscall('fs:write', dstPath, hostClipboardText);
-          ui.showToast('Pasted from Host Clipboard', fileName, 'success');
-          render();
-          return;
-        } catch (e) {
-          ui.showToast('Paste Error', e.message, 'error');
-        }
-      }
-
-      if (!window.AstraClipboard) return;
-      const srcPath = window.AstraClipboard.path;
-      
-      let newName = window.AstraClipboard.name;
-      let dstPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
-      
-      if (ui.state.resolvePath(dstPath)) {
-        const parts = newName.split('.');
-        const ext = parts.length > 1 ? '.' + parts.pop() : '';
-        const base = parts.join('.');
-        let count = 1;
-        do {
-          newName = `${base}_copy${count}${ext}`;
-          dstPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
-          count++;
-        } while (ui.state.resolvePath(dstPath));
-      }
-
-      function copyRecursive(s, d) {
-        const node = ui.state.resolvePath(s);
-        if (!node) return false;
-        if (node.type === 'file') {
-          ui.state.writeFile(d, node.content || '');
-        } else if (node.type === 'dir') {
-          ui.state.createDir(d);
-          for (const name of Object.keys(node.children || {})) {
-            copyRecursive(s + '/' + name, d + '/' + name);
+        render();
+      });
+      container.querySelector('#exp-paste')?.addEventListener('click', async () => {
+        let hostClipboardText = '';
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          try {
+            hostClipboardText = await navigator.clipboard.readText();
+          } catch (err) {
+            console.warn('Failed to read from host clipboard', err);
           }
         }
-        return true;
-      }
 
-      if (copyRecursive(srcPath, dstPath)) {
-        ui.showToast('Pasted successfully', newName, 'success');
-        render();
-      } else {
-        ui.showToast('Paste Failed', 'Could not copy item', 'error');
-      }
-    });
+        const localFileContent = window.AstraClipboard && window.AstraClipboard.path ? 
+          (state.resolvePath(window.AstraClipboard.path)?.content || '') : null;
 
-    container.querySelector('#exp-rename')?.addEventListener('click', () => {
-      if (!selectedItem) return;
-      const newName = prompt('Rename to:', selectedItem);
-      if (newName && newName.trim() && newName !== selectedItem) {
+        if (hostClipboardText && hostClipboardText !== localFileContent) {
+          let fileName = 'pasted_text.txt';
+          let dstPath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
+          if (state.resolvePath(dstPath)) {
+            let count = 1;
+            do {
+              fileName = `pasted_text_${count}.txt`;
+              dstPath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
+              count++;
+            } while (state.resolvePath(dstPath));
+          }
+          try {
+            Astra.syscall('fs:write', dstPath, hostClipboardText);
+            ui.showToast('Pasted from Host Clipboard', fileName, 'success');
+            render();
+            return;
+          } catch (e) {
+            ui.showToast('Paste Error', e.message, 'error');
+          }
+        }
+
+        if (!window.AstraClipboard) return;
+        const srcPath = window.AstraClipboard.path;
+        
+        let newName = window.AstraClipboard.name;
+        let dstPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
+        
+        if (state.resolvePath(dstPath)) {
+          const parts = newName.split('.');
+          const ext = parts.length > 1 ? '.' + parts.pop() : '';
+          const base = parts.join('.');
+          let count = 1;
+          do {
+            newName = `${base}_copy${count}${ext}`;
+            dstPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
+            count++;
+          } while (state.resolvePath(dstPath));
+        }
+
+        async function copyRecursive(s, d) {
+          const node = state.resolvePath(s);
+          if (!node) return false;
+          if (node.type === 'file') {
+            await Astra.syscall('fs:write', d, node.content || '');
+          } else if (node.type === 'dir') {
+            await Astra.syscall('fs:mkdir', d);
+            for (const name of Object.keys(node.children || {})) {
+              await copyRecursive(s + '/' + name, d + '/' + name);
+            }
+          }
+          return true;
+        }
+
+        try {
+          await copyRecursive(srcPath, dstPath);
+          ui.showToast('Pasted successfully', newName, 'success');
+          render();
+        } catch (e) {
+          ui.showToast('Paste Failed', e.message, 'error');
+        }
+      });
+      container.querySelector('#exp-rename')?.addEventListener('click', () => {
+        if (!selectedItem) return;
+        const newName = prompt('Rename to:', selectedItem);
+        if (newName && newName.trim() && newName !== selectedItem) {
+          const path = currentPath === '/' ? `/${selectedItem}` : `${currentPath}/${selectedItem}`;
+          Astra.syscall('fs:rename', path, newName.trim())
+            .then(() => {
+              selectedItem = newName.trim();
+              ui.showToast('Renamed', `→ ${newName.trim()}`, 'info');
+              render();
+            })
+            .catch(err => {
+              ui.showToast('Rename Error', err.message, 'error');
+            });
+        }
+      });
+      container.querySelector('#exp-delete')?.addEventListener('click', () => {
+        if (!selectedItem) return;
         const path = currentPath === '/' ? `/${selectedItem}` : `${currentPath}/${selectedItem}`;
-        ui.state.renameFile(path, newName.trim());
-        selectedItem = newName.trim();
-        ui.showToast('Renamed', `→ ${newName.trim()}`, 'info');
-        render();
-      }
-    });
-    container.querySelector('#exp-delete')?.addEventListener('click', () => {
-      if (!selectedItem) return;
-      const path = currentPath === '/' ? `/${selectedItem}` : `${currentPath}/${selectedItem}`;
-      const kernel = window.AstraKernel;
-      if (kernel) { kernel.moveToTrash(path); ui.showToast('Moved to Trash', selectedItem, 'info'); }
-      else { ui.state.deleteFile(path); }
-      selectedItem = null;
-      render();
-    });
+        Astra.syscall('fs:delete', path)
+          .then(() => {
+            ui.showToast('Moved to Trash', selectedItem, 'info');
+            selectedItem = null;
+            render();
+          })
+          .catch(err => {
+            ui.showToast('Delete Error', err.message, 'error');
+          });
+      });
+    }
   }
 
   function updateToolbarButtons() {
     const renameBtn = container.querySelector('#exp-rename');
     const deleteBtn = container.querySelector('#exp-delete');
     const copyBtn = container.querySelector('#exp-copy');
+    const restoreBtn = container.querySelector('#exp-restore');
     if (renameBtn) renameBtn.disabled = !selectedItem;
     if (deleteBtn) deleteBtn.disabled = !selectedItem;
     if (copyBtn) copyBtn.disabled = !selectedItem;
+    if (restoreBtn) restoreBtn.disabled = !selectedItem;
   }
 
   function getFileIcon(name) {
@@ -796,14 +873,38 @@ window.AstraApps.terminal = function(container, ui) {
   function tabComplete(input) {
     const val = input.value;
     const parts = val.split(' ');
-    const lastWord = Reflect.get(parts, parts.length - 1);
-    if (!lastWord) return;
+    const lastWord = parts[parts.length - 1];
+    if (lastWord === undefined) return;
+    
+    let matches = [];
+    
+    // If completing the first word (command name)
+    if (parts.length === 1) {
+      const commandsList = [
+        'help', 'export', 'env', 'unset', 'ls', 'cat', 'pwd', 'cd', 'mkdir', 'touch', 
+        'rm', 'cp', 'mv', 'chmod', 'chown', 'tree', 'find', 'grep', 'echo', 'wc', 
+        'ps', 'kill', 'top', 'uptime', 'whoami', 'su', 'sudo', 'passwd', 'id', 
+        'ping', 'curl', 'ifconfig', 'nslookup', 'netstat', 'wget', 'hostname', 
+        'git', 'jobs', 'fg', 'bg', 'neofetch', 'uname', 'date', 'df', 'free', 
+        'dmesg', 'clear', 'history', 'sysreset', 'health', 'cowsay', 'fortune', 
+        'sl', 'figlet', 'node', 'sysinfo'
+      ];
+      matches = commandsList.filter(cmd => cmd.startsWith(lastWord));
+    }
+    
+    // Also search in current directory VFS paths
     const dir = ui.state.resolvePath(currentDir);
-    if (!dir || !dir.children) return;
-    const matches = Object.keys(dir.children).filter(n => n.startsWith(lastWord));
+    if (dir && dir.children) {
+      const fileMatches = Object.keys(dir.children).filter(n => n.startsWith(lastWord));
+      matches = [...matches, ...fileMatches];
+    }
+    
+    // Deduplicate matches
+    matches = Array.from(new Set(matches));
+    
     if (matches.length === 1) {
-      Reflect.set(parts, parts.length - 1, matches[0]);
-      input.value = parts.join(' ');
+      parts[parts.length - 1] = matches[0];
+      input.value = parts.join(' ') + (parts.length === 1 ? ' ' : '');
     } else if (matches.length > 1) {
       addOutput(matches.join('  '), 'info');
     }
@@ -1247,16 +1348,21 @@ window.AstraApps.workflow = function(container, ui) {
   function render() {
     const workflows = ui.state.workflows || [];
     const current = workflows[0];
+    
     const timelineHTML = current ? current.steps.map(step => `
-      <div class="workflow-step ${step.status || 'pending'}">
-        <div class="workflow-step-head">
-          <strong>${window.escapeHTML(step.title || step.name || step.id)}</strong>
-          <span class="workflow-step-status">${window.escapeHTML(step.status || 'pending')}</span>
+      <div class="workflow-step ${step.status || 'pending'}" style="border-left: 3px solid ${step.status === 'completed' ? '#10b981' : step.status === 'failed' ? '#ef4444' : 'var(--text-muted)'}; padding-left: 8px; margin-bottom: 12px; font-size: 11px;">
+        <div class="workflow-step-head" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+          <strong style="font-size: 12px; color: var(--text-primary);">${window.escapeHTML(step.title || step.name || step.id)}</strong>
+          <span class="workflow-step-status" style="text-transform: uppercase; font-size: 9px; padding: 2px 6px; border-radius: 4px; background: ${step.status === 'completed' ? 'rgba(16,185,129,0.15)' : step.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.05)'}; color: ${step.status === 'completed' ? '#10b981' : step.status === 'failed' ? '#ef4444' : 'var(--text-muted)'};">${window.escapeHTML(step.status || 'pending')}</span>
         </div>
-        <div class="workflow-step-meta">
-          <span>Assigned: ${window.escapeHTML(step.assigned || 'System')}</span>
+        <div class="workflow-step-meta" style="color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
+          <span>Agent: <strong>${window.escapeHTML(step.assigned || 'System')}</strong> (Conf: ${step.confidence || 100}%)</span>
           <span>${new Date(step.updatedAt || step.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
         </div>
+        ${step.reason ? `<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Reason:</strong> ${window.escapeHTML(step.reason)}</div>` : ''}
+        ${step.target ? `<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Target:</strong> <code>${window.escapeHTML(step.target)}</code></div>` : ''}
+        ${step.outcome ? `<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Outcome:</strong> ${window.escapeHTML(step.outcome)}</div>` : ''}
+        ${step.verification ? `<div style="margin-top: 2px; color: #34d399;"><strong>Verification:</strong> ${window.escapeHTML(step.verification)}</div>` : ''}
       </div>
     `).join('') : '<div class="workflow-empty">No workflows recorded yet.</div>';
 
@@ -1273,6 +1379,7 @@ window.AstraApps.workflow = function(container, ui) {
         </div>
       </div>
     `).join('');
+
     const approvalButtons = current ? `
       <div class="workflow-approval-panel">
         <h4>Latest Workflow Approval</h4>
@@ -1283,6 +1390,32 @@ window.AstraApps.workflow = function(container, ui) {
         </div>
       </div>
     ` : '<div class="workflow-empty">No active workflow to approve.</div>';
+
+    const orchestrator = window.AstraAgentOrchestrator;
+    const isPaused = orchestrator ? orchestrator.isPaused : false;
+    const isActive = orchestrator ? orchestrator.activeWorkflow : false;
+
+    const controlButtons = current ? `
+      <div class="workflow-controls-panel" style="margin-top: 12px; padding: 10px; background: var(--bg-glass-light); border: 1px solid var(--border-glass); border-radius: 6px;">
+        <h5 style="margin: 0 0 6px 0; font-size: 12px;">Execution & Recovery Controls</h5>
+        <div style="display: flex; gap: 8px;">
+          ${isActive ? `
+            <button class="btn btn-sm" id="wf-toggle-pause" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: var(--text-primary); cursor: pointer; padding: 4px 8px; border-radius: 4px; font-size: 11px;">
+              ${isPaused ? '▶ Resume Agent' : '⏸ Pause Agent'}
+            </button>
+          ` : `
+            ${current.status !== 'completed' && current.status !== 'failed' && current.status !== 'rejected' ? `
+              <button class="btn btn-sm btn-primary" id="wf-resume-workflow" style="padding: 4px 8px; font-size: 11px;">
+                ▶ Resume Workflow
+              </button>
+            ` : ''}
+          `}
+          <button class="btn btn-sm btn-secondary" id="wf-rollback-last" style="padding: 4px 8px; font-size: 11px; background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3);">
+            ↩ Rollback Last Step
+          </button>
+        </div>
+      </div>
+    ` : '';
 
     window.renderSafeHTML(container, `
       <div class="workflow-app">
@@ -1300,8 +1433,9 @@ window.AstraApps.workflow = function(container, ui) {
           </div>
           <div class="workflow-panel">
             <h4>Latest Workflow Steps</h4>
-            <div class="workflow-timeline">${timelineHTML}</div>
+            <div class="workflow-timeline" style="max-height: 240px; overflow-y: auto; padding-right: 4px;">${timelineHTML}</div>
             ${approvalButtons}
+            ${controlButtons}
           </div>
         </div>
       </div>
@@ -1329,6 +1463,25 @@ window.AstraApps.workflow = function(container, ui) {
       ui.state.updateWorkflow(current.id, { status: 'rejected' });
       ui.showToast('Workflow Rejected', current.goal, 'warning');
       render();
+    });
+    container.querySelector('#wf-toggle-pause')?.addEventListener('click', () => {
+      if (orchestrator) {
+        orchestrator.togglePauseWorkflow();
+        render();
+      }
+    });
+    container.querySelector('#wf-resume-workflow')?.addEventListener('click', () => {
+      if (orchestrator && current) {
+        orchestrator.resumeWorkflow(current);
+        render();
+      }
+    });
+    container.querySelector('#wf-rollback-last')?.addEventListener('click', async () => {
+      if (orchestrator) {
+        const restored = await orchestrator.undoLastWorkflow();
+        ui.showToast('Rollback Complete', `Reverted ${restored} files modified by agent.`, 'success');
+        render();
+      }
     });
   }
 

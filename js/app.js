@@ -21,6 +21,11 @@ function bootOS() {
   ui.init();
   const orchestrator = new AgentOrchestrator(state, ui);
   window.AstraAgentOrchestrator = orchestrator;
+  
+  // Wait for IndexedDB initialization to fully finish before resuming workflows
+  state.dbLoaded.then(() => {
+    orchestrator.autoResumeWorkflows();
+  });
   const runtime = new AppRuntime({ state, kernel: window.AstraKernel, ui, bus });
   window.AstraBus = bus;
   window.AstraRuntime = runtime;
@@ -31,11 +36,13 @@ function bootOS() {
   window.AstraBus.on('workflow.created', () => {
     ui.updateNotifBadge?.();
     window.refreshTasksBoard?.();
+    window.refreshWorkflowApp?.();
     state.addNotification('info', 'Workflow Engine', 'A new agent workflow has been created.');
   });
   window.AstraBus.on('workflow.updated', () => {
     ui.updateNotifBadge?.();
     window.refreshTasksBoard?.();
+    window.refreshWorkflowApp?.();
     state.addNotification('info', 'Workflow Engine', 'An agent workflow was updated.');
   });
   window.AstraBus.on('fs.changed', () => {
@@ -77,6 +84,12 @@ function bootOS() {
     const tasksBody = document.querySelector('.window[data-app="tasks"] .window-body');
     if (tasksBody && window.AstraApps.tasks) {
       window.AstraApps.tasks(tasksBody, ui);
+    }
+  };
+  window.refreshWorkflowApp = () => {
+    const workflowBody = document.querySelector('.window[data-app="workflow"] .window-body');
+    if (workflowBody && window.AstraApps.workflow) {
+      window.AstraApps.workflow(workflowBody, ui);
     }
   };
   window.refreshDashboardLogs = () => {
@@ -511,7 +524,8 @@ function bootOS() {
     // 5. "Finish organizing the research notes" / "organize notes" / "meeting notes"
     if (lower.includes('organize') && lower.includes('notes') || lower.includes('meeting notes')) {
       const notesContent = `- Team Meeting Notes: Orbit trajectory adjustments resolved.\n- Collisions risk verified below 0.01%.\n- WatcherAgent verified Express endpoints compile smoothly.\n- Next milestone: WebSocket telemetry streams integration.\n`;
-      state.writeFile('/home/divyanshu/Documents/meeting_notes.txt', notesContent);
+      window.Astra.syscall('fs:write', '/home/divyanshu/Documents/meeting_notes.txt', notesContent)
+        .catch(err => console.error("Syscall write failed in chatbot notes", err));
       appendChatBubble("Organizing and compiling your recent research/meeting notes... I have saved the structured notes to <strong>/home/divyanshu/Documents/meeting_notes.txt</strong> in the VFS and opened it in the Code Editor.", 'assistant');
       setTimeout(() => {
         ui.openApp('editor');
@@ -579,8 +593,8 @@ function bootOS() {
   }
   
   if (afkUndoBtn) {
-    afkUndoBtn.addEventListener('click', () => {
-      const restored = orchestrator.undoLastWorkflow();
+    afkUndoBtn.addEventListener('click', async () => {
+      const restored = await orchestrator.undoLastWorkflow();
       ui.showToast('Rollback Complete', `Reverted ${restored} files modified by agent.`, 'success');
       state.addNotification('success', 'System Rollback', `Successfully reverted ${restored} files modified during AFK mode.`);
       afkUndoBtn.style.display = 'none';

@@ -219,8 +219,8 @@ export class UIController {
     document.getElementById('desktop')?.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       this.showContextMenu(e.clientX, e.clientY, [
-        { label: '📁 New Folder', action: () => { const n = prompt('Folder name:'); if (n) { this.state.createDir(`/home/divyanshu/Desktop/${n}`); this.showToast('Created', n, 'success'); } } },
-        { label: '📄 New File', action: () => { const n = prompt('File name:'); if (n) { this.state.writeFile('/home/divyanshu/Desktop/' + n, ''); this.showToast('Created', n, 'success'); } } },
+        { label: '📁 New Folder', action: () => { const n = prompt('Folder name:'); if (n) { window.Astra.syscall('fs:mkdir', `/home/divyanshu/Desktop/${n}`).then(() => this.showToast('Created', n, 'success')).catch(err => this.showToast('Error', err.message, 'error')); } } },
+        { label: '📄 New File', action: () => { const n = prompt('File name:'); if (n) { window.Astra.syscall('fs:write', '/home/divyanshu/Desktop/' + n, '').then(() => this.showToast('Created', n, 'success')).catch(err => this.showToast('Error', err.message, 'error')); } } },
         { divider: true },
         { label: '🖥 Open Terminal', action: () => this.openApp('terminal') },
         { label: '⟳ Refresh Desktop', action: () => location.reload() },

@@ -607,13 +607,14 @@ window.AstraApps.dailybriefing = function(container, ui) {
     }
 
     const filePath = '/home/divyanshu/Documents/daily_briefings.md';
-    const success = state.writeFile(filePath, md);
-    if (success) {
-      ui.showToast('Briefing Exported', `Saved to ${filePath}`, 'success');
-      state.addNotification('success', 'Daily Briefing', `Exported briefing to ${filePath}`);
-    } else {
-      ui.showToast('Export Failed', 'Unable to write to VFS path.', 'error');
-    }
+    window.Astra.syscall('fs:write', filePath, md)
+      .then(() => {
+        ui.showToast('Briefing Exported', `Saved to ${filePath}`, 'success');
+        state.addNotification('success', 'Daily Briefing', `Exported briefing to ${filePath}`);
+      })
+      .catch(err => {
+        ui.showToast('Export Failed', err.message, 'error');
+      });
   }
 
   render();
@@ -627,6 +628,64 @@ window.AstraApps.trust = function(container, ui) {
   let searchQuery = '';
   let filterType = 'all';
   let filterLevel = 'all';
+
+  function computeDiff(oldText, newText) {
+    const oldLines = oldText ? oldText.split('\n') : [];
+    const newLines = newText ? newText.split('\n') : [];
+    
+    let diffHTML = '';
+    if (oldLines.length === 0) {
+      return newLines.map(line => `<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${window.escapeHTML(line)}</div>`).join('');
+    }
+    
+    let i = 0, j = 0;
+    while (i < oldLines.length || j < newLines.length) {
+      if (i < oldLines.length && j < newLines.length) {
+        if (oldLines[i] === newLines[j]) {
+          diffHTML += `<div style="color: var(--text-secondary); padding: 2px 4px; font-family: var(--font-mono); font-size: 11px;">&nbsp; ${window.escapeHTML(oldLines[i])}</div>`;
+          i++;
+          j++;
+        } else {
+          let foundMatch = false;
+          for (let k = j + 1; k < Math.min(j + 8, newLines.length); k++) {
+            if (oldLines[i] === newLines[k]) {
+              for (let addIdx = j; addIdx < k; addIdx++) {
+                diffHTML += `<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${window.escapeHTML(newLines[addIdx])}</div>`;
+              }
+              j = k;
+              foundMatch = true;
+              break;
+            }
+          }
+          if (!foundMatch) {
+            for (let k = i + 1; k < Math.min(i + 8, oldLines.length); k++) {
+              if (oldLines[k] === newLines[j]) {
+                for (let delIdx = i; delIdx < k; delIdx++) {
+                  diffHTML += `<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${window.escapeHTML(oldLines[delIdx])}</div>`;
+                }
+                i = k;
+                foundMatch = true;
+                break;
+              }
+            }
+          }
+          if (!foundMatch) {
+            diffHTML += `<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${window.escapeHTML(oldLines[i])}</div>`;
+            diffHTML += `<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${window.escapeHTML(newLines[j])}</div>`;
+            i++;
+            j++;
+          }
+        }
+      } else if (i < oldLines.length) {
+        diffHTML += `<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${window.escapeHTML(oldLines[i])}</div>`;
+        i++;
+      } else if (j < newLines.length) {
+        diffHTML += `<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${window.escapeHTML(newLines[j])}</div>`;
+        j++;
+      }
+    }
+    return diffHTML;
+  }
 
   // Listen to Bus events to automatically update the dashboard
   const unsubApprovals = window.AstraBus?.on('approvals.changed', () => {
@@ -787,6 +846,16 @@ window.AstraApps.trust = function(container, ui) {
         queue.forEach(appr => {
           const isDestructive = appr.callName.includes('delete') || appr.callName.includes('kill');
           const panelStyle = isDestructive ? 'border-color: var(--color-red); background: rgba(239,68,68,0.02);' : '';
+          
+          let diffHTML = '';
+          if (appr.callName === 'fs:write') {
+            const filePath = appr.args[0];
+            const node = state.resolvePath(filePath);
+            const oldText = node && node.type === 'file' ? (node.content || '') : '';
+            const newText = appr.args[1] || '';
+            diffHTML = computeDiff(oldText, newText);
+          }
+
           approvalsListHTML += `
             <div class="db-file-item" style="flex-direction: column; align-items: stretch; gap: 8px; margin-bottom: 8px; background: var(--bg-glass-light); border: 1px solid var(--border-glass); ${panelStyle}">
               <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -794,7 +863,12 @@ window.AstraApps.trust = function(container, ui) {
                 <span style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">${new Date(appr.timestamp).toLocaleTimeString()}</span>
               </div>
               <div style="font-size: 12px; color: var(--text-secondary);">Target: <code>${window.escapeHTML(String(appr.args[0]))}</code></div>
-              ${appr.callName === 'fs:write' && appr.args[1] ? `<pre style="font-family: var(--font-mono); font-size:11px; background: rgba(0,0,0,0.25); padding: 8px; border-radius:4px; max-height:100px; overflow-y:auto; margin:4px 0; border: 1px solid rgba(255,255,255,0.05); color: #a5f3fc;">${window.escapeHTML(appr.args[1].slice(0, 300))}${appr.args[1].length > 300 ? '\n...' : ''}</pre>` : ''}
+              ${appr.callName === 'fs:write' ? `
+                <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin: 6px 0 2px 0;">Proposed Code Patch Diff:</div>
+                <div style="font-family: var(--font-mono); font-size:11px; background: rgba(0,0,0,0.3); padding: 8px; border-radius:4px; max-height:160px; overflow-y:auto; margin:4px 0; border: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 2px; text-align: left;">
+                  ${diffHTML}
+                </div>
+              ` : ''}
               <div style="display: flex; gap: 8px; margin-top: 4px;">
                 <button class="btn btn-sm btn-approve" data-id="${appr.id}" style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">✓ Approve</button>
                 <button class="btn btn-sm btn-deny" data-id="${appr.id}" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">✕ Deny</button>
@@ -1012,36 +1086,40 @@ window.AstraApps.trust = function(container, ui) {
     // Rollback Tab Event Handlers
     if (activeTab === 'rollback') {
       container.querySelectorAll('.trust-rollback-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
           const path = btn.getAttribute('data-path');
           const orchestrator = ui.orchestrator;
           const snapshots = orchestrator ? orchestrator.vfsSnapshots : {};
           if (orchestrator && snapshots[path] !== undefined) {
             const original = snapshots[path];
-            if (original === null) {
-              state.deleteFile(path);
-            } else {
-              state.writeFile(path, original);
-            }
-            delete snapshots[path];
-            
-            const textarea = document.getElementById('editor-text-area');
-            const activeFile = document.getElementById('context-file')?.textContent;
-            if (activeFile && path.endsWith(activeFile) && textarea) {
-              textarea.value = original || '';
-            }
-            const editorContent = document.getElementById('editor-content');
-            if (editorContent) {
-              const tabActive = document.querySelector('.editor-tab.active span')?.textContent;
-              if (tabActive && path.endsWith(tabActive)) {
-                editorContent.value = original || '';
+            try {
+              if (original === null) {
+                await window.Astra.syscall('fs:delete', path);
+              } else {
+                await window.Astra.syscall('fs:write', path, original);
               }
-            }
+              delete snapshots[path];
+              
+              const textarea = document.getElementById('editor-text-area');
+              const activeFile = document.getElementById('context-file')?.textContent;
+              if (activeFile && path.endsWith(activeFile) && textarea) {
+                textarea.value = original || '';
+              }
+              const editorContent = document.getElementById('editor-content');
+              if (editorContent) {
+                const tabActive = document.querySelector('.editor-tab.active span')?.textContent;
+                if (tabActive && path.endsWith(tabActive)) {
+                  editorContent.value = original || '';
+                }
+              }
 
-            ui.showToast('File Rolled Back', `Reverted modifications in ${path.split('/').pop()}`, 'success');
-            state.addNotification('success', 'Security Rollback', `Rolled back changes in ${path}`);
-            render();
-            if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+              ui.showToast('File Rolled Back', `Reverted modifications in ${path.split('/').pop()}`, 'success');
+              state.addNotification('success', 'Security Rollback', `Rolled back changes in ${path}`);
+              render();
+              if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+            } catch (err) {
+              ui.showToast('Rollback Failed', err.message, 'error');
+            }
           }
         });
       });

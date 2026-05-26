@@ -172,7 +172,11 @@ export class AgentOrchestrator {
           title: 'Draft execution plan',
           assigned: 'PlannerAgent',
           status: 'completed',
-          confidence: 98
+          confidence: 98,
+          reason: 'Formulate chronological checklist to fulfill target user goal',
+          target: 'System Plan Board',
+          outcome: `Assigned tasks to PlannerAgent, ExecutorAgent, WatcherAgent, and MemoryAgent`,
+          verification: 'Orchestrator validated task array constraints'
         });
         this.state.saveState();
         if (window.refreshTasksBoard) window.refreshTasksBoard();
@@ -201,7 +205,11 @@ export class AgentOrchestrator {
             title: `Read ${task.path.split('/').pop()}`,
             assigned: task.assigned,
             status: 'completed',
-            confidence: 95
+            confidence: 95,
+            reason: task.desc,
+            target: task.path,
+            outcome: `Read file contents of ${task.path}`,
+            verification: 'File exists and permission checks passed'
           });
           this.state.updateTaskStatus(task.id, 'completed');
           
@@ -258,7 +266,11 @@ app.post('/api/v1/council', (req, res) => {
               assigned: 'SafetyLayer',
               status: 'failed',
               error: 'PERMISSION_DENIED',
-              confidence: 30
+              confidence: 30,
+              reason: `Request write clearance for ${task.path}`,
+              target: task.path,
+              outcome: 'Write clearance denied by PolicyEngine',
+              verification: 'Security sandbox boundary check failed'
             });
             this.state.updateTaskStatus(task.id, 'pending');
             this.setAgentIdle();
@@ -290,7 +302,11 @@ app.post('/api/v1/council', (req, res) => {
             title: task.recoveryFix ? 'Fix syntax mismatch' : `Modify ${task.path.split('/').pop()}`,
             assigned: task.assigned,
             status: 'completed',
-            confidence: 93
+            confidence: 93,
+            reason: task.desc,
+            target: task.path,
+            outcome: `Injected code patch into ${task.path}`,
+            verification: task.recoveryFix ? 'Resolved double parenthesis' : 'Syntax validation pending build compilation'
           });
           this.state.updateTaskStatus(task.id, 'completed');
           this.afkSummaryData.filesModified.push(task.path);
@@ -321,12 +337,16 @@ app.post('/api/v1/council', (req, res) => {
             this.logAgent(task.assigned, 'Build compilation failed. Intercepted syntax error.', 'alert');
             this.ui.showToast('Build Failed', 'Compiler syntax error detected.', 'error');
             
-            this.state.appendWorkflowStep(workflow.id, {
+             this.state.appendWorkflowStep(workflow.id, {
               title: 'Verify build compilation',
               assigned: task.assigned,
               status: 'failed',
               error: 'SYNTAX_ERROR',
-              confidence: 45
+              confidence: 45,
+              reason: 'Run validation build on Project Astra gateway index file',
+              target: 'npm run build',
+              outcome: 'Build compilation failed due to syntax error',
+              verification: 'Unexpected token ) in index.js on line 20'
             });
             
             await this.delay(2000);
@@ -361,7 +381,11 @@ app.post('/api/v1/council', (req, res) => {
               title: isRetry ? 'Verify build compilation retry' : 'Verify build compilation',
               assigned: task.assigned,
               status: 'completed',
-              confidence: 99
+              confidence: 99,
+              reason: 'Run validation build on Project Astra gateway index file',
+              target: 'npm run build',
+              outcome: 'Build compiled successfully without errors',
+              verification: 'Output bundle verified successfully'
             });
             this.state.updateTaskStatus(task.id, 'completed');
             this.afkSummaryData.tasksCompleted++;
@@ -385,7 +409,11 @@ app.post('/api/v1/council', (req, res) => {
         title: 'Update memory relationships',
         assigned: 'MemoryAgent',
         status: 'completed',
-        confidence: 97
+        confidence: 97,
+        reason: 'Link definitions and user associations inside knowledge base',
+        target: 'AI Memory Graph',
+        outcome: 'Recorded semantic memory node for council endpoint',
+        verification: 'Memory link relationships populated'
       });
       if (window.refreshSidebarMemories) window.refreshSidebarMemories();
       if (window.drawMemoryGraphApp) window.drawMemoryGraphApp();
@@ -462,17 +490,21 @@ app.post('/api/v1/council', (req, res) => {
     }
   }
 
-  rollbackWorkflowStep(workflowId, stepId) {
+  async rollbackWorkflowStep(workflowId, stepId) {
     const wf = this.state.workflows.find(w => w.id === workflowId);
     if (!wf) return false;
     const step = wf.steps.find(s => s.id === stepId);
     if (!step || !step.backups) return false;
     
     for (const [path, content] of Object.entries(step.backups)) {
-      if (content === null) {
-        this.state.deleteFile(path);
-      } else {
-        this.state.writeFile(path, content);
+      try {
+        if (content === null) {
+          await window.Astra.syscall('fs:delete', path);
+        } else {
+          await window.Astra.syscall('fs:write', path, content);
+        }
+      } catch (err) {
+        console.error("Failed syscall in rollbackWorkflowStep", err);
       }
     }
     step.status = 'rolled_back';
@@ -481,15 +513,19 @@ app.post('/api/v1/council', (req, res) => {
     return true;
   }
 
-  undoLastWorkflow() {
+  async undoLastWorkflow() {
     let restoredCount = 0;
     for (const [path, content] of Object.entries(this.vfsSnapshots)) {
-      if (content === null) {
-        this.state.deleteFile(path);
-      } else {
-        this.state.writeFile(path, content);
+      try {
+        if (content === null) {
+          await window.Astra.syscall('fs:delete', path);
+        } else {
+          await window.Astra.syscall('fs:write', path, content);
+        }
+        restoredCount++;
+      } catch (err) {
+        console.error("Failed syscall in undoLastWorkflow", err);
       }
-      restoredCount++;
     }
     this.vfsSnapshots = {};
     
@@ -736,6 +772,17 @@ app.post('/api/v1/council', (req, res) => {
                   }
                 },
                 {
+                  name: "rollback_file",
+                  description: "Rolls back the specified file to its snapshot version prior to agent modifications.",
+                  parameters: {
+                    type: "OBJECT",
+                    properties: {
+                      path: { type: "STRING", description: "The absolute path of the file to rollback (e.g. '/Project_Astra/index.js')" }
+                    },
+                    required: ["path"]
+                  }
+                },
+                {
                   name: "add_task",
                   description: "Creates and adds a new task to the agent task board.",
                   parameters: {
@@ -898,6 +945,39 @@ app.post('/api/v1/council', (req, res) => {
             const activeFile = document.querySelector('.editor-tab.active span')?.textContent;
             if (activeFile && args.path.endsWith(activeFile)) {
               editorTextarea.value = args.content;
+            }
+          }
+          if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+          return { success: true };
+        } catch (err) {
+          return { error: err.message };
+        }
+      }
+
+      case 'rollback_file': {
+        const snapshots = this.vfsSnapshots;
+        if (snapshots[args.path] === undefined) {
+          return { error: `No snapshot available for path: ${args.path}` };
+        }
+        const original = snapshots[args.path];
+        try {
+          if (original === null) {
+            await window.Astra.syscall('fs:delete', args.path);
+          } else {
+            await window.Astra.syscall('fs:write', args.path, original);
+          }
+          delete snapshots[args.path];
+          
+          const textarea = document.getElementById('editor-text-area') || document.getElementById('editor-content');
+          const activeFile = document.getElementById('context-file')?.textContent;
+          if (activeFile && args.path.endsWith(activeFile) && textarea) {
+            textarea.value = original || '';
+          }
+          const editorContent = document.getElementById('editor-content');
+          if (editorContent) {
+            const tabActive = document.querySelector('.editor-tab.active span')?.textContent;
+            if (tabActive && args.path.endsWith(tabActive)) {
+              editorContent.value = original || '';
             }
           }
           if (window.refreshExplorerGrid) window.refreshExplorerGrid();
