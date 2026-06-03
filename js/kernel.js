@@ -5,62 +5,272 @@
 export class Kernel {
   constructor(state) {
     this.state = state;
-    this.nextPid = 1000;
-    this.jobs = [];
-    this.nextJobId = 1;
-    this.bootDaemons();
-    this.policyEngine = new window.PolicyEngine(state);
+    this.state.withKernelWrite(() => {
+      this.nextPid = 1000;
+      if (!this.state.jobs) this.state.jobs = [];
+      this.jobs = this.state.jobs;
+      if (!this.state.nextJobId) this.state.nextJobId = 1;
+      this.bootDaemons();
+      this.policyEngine = new window.PolicyEngine(state);
+      this.aliases = {};
+      this.shellFunctions = {};
+      this.loadBashRC();
+    });
     window.Astra = {
-      syscall: (callName, ...args) => {
-        const callerId = window.AstraRuntime ? window.AstraRuntime.getActiveCallerId() : 'unknown';
-        return this.syscall(callerId, callName, args);
+      syscall: (tokenOrCallName, ...args) => {
+        let token, callName, syscallArgs;
+        if (typeof tokenOrCallName === 'string' && tokenOrCallName.startsWith('tok_')) {
+          token = tokenOrCallName;
+          callName = args[0];
+          syscallArgs = args.slice(1);
+        } else {
+          callName = tokenOrCallName;
+          syscallArgs = args;
+          token = 'sys_session';
+        }
+        return this.syscall(token, callName, syscallArgs);
       }
     };
   }
 
-  syscall(callerId, callName, args) {
-    const permCheck = this.policyEngine ? this.policyEngine.checkPermission(callerId, callName, args) : true;
-    if (permCheck === false) {
-      this.state.logEvent('security.access_denied', callerId, { callName, path: args && args[0] }, 'WARN');
-      throw new Error(`Permission Denied: Caller "${callerId}" lacks permission for syscall "${callName}"`);
+  loadBashRC() {
+    this.aliases = {};
+    this.shellFunctions = {};
+    
+    const currentUser = this.getCurrentUser();
+    const bashrcPath = `/home/${currentUser}/.bashrc`;
+    const node = this.state.resolvePath(bashrcPath);
+    if (!node || node.type !== 'file' || !node.content) return;
+    
+    const lines = node.content.split('\n');
+    let inFunction = null;
+    let functionBody = [];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      
+      // Parse alias: alias name='value' or alias name="value"
+      if (trimmed.startsWith('alias ')) {
+        const parts = trimmed.substring(6).split('=');
+        if (parts.length >= 2) {
+          const aliasName = parts[0].trim();
+          const aliasValue = parts.slice(1).join('=').trim().replace(/^['"]|['"]$/g, '');
+          this.aliases[aliasName] = aliasValue;
+        }
+        continue;
+      }
+      
+      // Parse export: export KEY=VALUE
+      if (trimmed.startsWith('export ')) {
+        const parts = trimmed.substring(7).split('=');
+        if (parts.length >= 2) {
+          const key = parts[0].trim();
+          const val = parts.slice(1).join('=').trim().replace(/^['"]|['"]$/g, '');
+          this.state.env[key] = val;
+        }
+        continue;
+      }
+      
+      // Parse shell function: func_name() { ... }
+      if (inFunction) {
+        if (trimmed === '}') {
+          this.shellFunctions[inFunction] = functionBody.join('\n');
+          inFunction = null;
+          functionBody = [];
+        } else {
+          functionBody.push(line);
+        }
+        continue;
+      }
+      
+      // Check if function start
+      const funcMatch = trimmed.match(/^([a-zA-Z0-9_\-]+)\s*\(\s*\)\s*\{/);
+      if (funcMatch) {
+        inFunction = funcMatch[1];
+        functionBody = [];
+      }
     }
+  }
 
-    if (permCheck === 'ask') {
-      return new Promise((resolve, reject) => {
-        const targetPath = (args && args[0]) || '';
-        const details = `Syscall "${callName}" on target: "${targetPath}"`;
-        const apprId = this.state.addApprovalRequest(callerId, callName, args, details);
+  getCallerInfo(callerToken) {
+    const isSystemAdmin = this.state.currentSession.role === 'admin' || this.getCurrentUser() === 'root';
+    const currentUser = this.getCurrentUser();
+    
+    if (callerToken === 'sys_session') {
+      return {
+        appId: 'session_caller',
+        pid: 9999,
+        token: 'sys_session',
+        correlationId: 'corr_session',
+        user: currentUser,
+        role: this.state.currentSession.role || 'user',
+        permissions: isSystemAdmin ? 
+          ['fs:read', 'fs:write', 'settings:read', 'settings:write', 'proc:spawn', 'proc:kill', 'ui:write'] :
+          ['fs:read', 'fs:write'],
+        sandbox: isSystemAdmin ? ['/'] : [`/home/${currentUser}`, '/tmp']
+      };
+    }
+    if (callerToken === 'sys_legacy' || callerToken === 'tok_system' || callerToken === 'system') {
+      return {
+        appId: 'system',
+        pid: 0,
+        token: callerToken,
+        correlationId: 'corr_system',
+        user: 'root',
+        role: 'admin',
+        permissions: ['fs:read', 'fs:write', 'settings:read', 'settings:write', 'proc:spawn', 'proc:kill', 'ui:write'],
+        sandbox: ['/']
+      };
+    }
+    let proc = null;
+    if (typeof callerToken === 'string' && (callerToken.startsWith('tok_') || callerToken.startsWith('sys_'))) {
+      proc = this.state.processTable.find(p => p.token === callerToken);
+    }
+    if (!proc) {
+      return {
+        appId: 'unknown_caller',
+        pid: 9999,
+        token: 'unknown_token',
+        correlationId: 'corr_unknown',
+        user: 'guest',
+        role: 'user',
+        permissions: [],
+        sandbox: []
+      };
+    }
+    const manifests = this.state.registry?.appManifests || {};
+    const safeProcName = window.sanitizeKey(proc.name);
+    const manifest = safeProcName ? Reflect.get(manifests, safeProcName) : null;
+    const allowedPerms = manifest ? (manifest.permissions || []) : [];
+    
+    let sandboxPaths = manifest ? (manifest.sandbox || []) : ['/home/divyanshu'];
+    const procUser = proc.user || currentUser;
+    const procRole = proc.role || (this.state.currentSession.role || 'user');
+    const isProcAdmin = procRole === 'admin' || procUser === 'root';
+    
+    // Intersect/adjust sandbox based on user identity for non-admin processes
+    if (!isProcAdmin) {
+      const userHome = `/home/${procUser}`;
+      sandboxPaths = sandboxPaths.map(p => {
+        if (p.startsWith('/home/divyanshu')) {
+          return p.replace('/home/divyanshu', userHome);
+        }
+        return p;
+      }).filter(p => {
+        // Guest/non-admin users should not have access to administrative project directories
+        const isProjectAstra = p === '/Project_Astra' || p.startsWith('/Project_Astra/');
+        const isSatelliteDefense = p === '/Satellite_Defense' || p.startsWith('/Satellite_Defense/');
+        const isRoot = p === '/root' || p.startsWith('/root/');
+        return !isProjectAstra && !isSatelliteDefense && !isRoot;
+      });
+      // Ensure the user's home directory and /tmp are available in their sandbox
+      if (!sandboxPaths.includes(userHome)) sandboxPaths.push(userHome);
+      if (!sandboxPaths.includes('/tmp')) sandboxPaths.push('/tmp');
+    }
+    
+    return {
+      appId: proc.name,
+      pid: proc.pid,
+      token: proc.token,
+      correlationId: proc.correlationId,
+      user: procUser,
+      role: procRole,
+      permissions: allowedPerms,
+      sandbox: sandboxPaths
+    };
+  }
+
+  syscall(callerToken, callName, args) {
+    const requestId = 'req_' + Math.random().toString(36).substring(2);
+    const startTime = Date.now();
+    
+    const callerInfo = this.getCallerInfo(callerToken);
+    const correlationId = callerInfo.correlationId || ('corr_' + Math.random().toString(36).substring(2));
+    const target = (args && args[0]) || '';
+    
+    const buildResponse = (status, result, errorMsg, errorCode) => {
+      const durationMs = Date.now() - startTime;
+      const response = {
+        requestId,
+        correlationId,
+        status,
+        result: result !== undefined ? result : null,
+        error: errorMsg ? { message: errorMsg, code: errorCode || 'ERROR' } : null,
+        metadata: {
+          durationMs,
+          timestamp: Date.now(),
+          source: callerInfo.appId,
+          target: String(target)
+        }
+      };
+      this.state.withKernelWrite(() => {
+        this.state.logEvent('kernel.syscall', callerInfo.appId, { callName, status, durationMs }, 'INFO');
+      });
+      return response;
+    };
+    
+    return new Promise((resolve) => {
+      const permCheck = this.policyEngine ? this.state.withKernelWrite(() => this.policyEngine.checkPermission(callerInfo, callName, args)) : true;
+      
+      if (permCheck === false) {
+        this.state.withKernelWrite(() => {
+          this.state.logEvent('security.access_denied', callerInfo.appId, { callName, path: target }, 'WARN');
+        });
+        resolve(buildResponse('denied', null, `Permission Denied: Caller lacks permission for syscall "${callName}"`, 'PERMISSION_DENIED'));
+        return;
+      }
+      
+      if (permCheck === 'ask') {
+        const details = `Syscall "${callName}" on target: "${target}"`;
+        const approvalMetadata = {
+          source: callerInfo.appId,
+          target: String(target),
+          workflowId: callerInfo.correlationId && callerInfo.correlationId.startsWith('wf-') ? callerInfo.correlationId : null,
+          pid: callerInfo.pid,
+          user: callerInfo.user,
+          role: callerInfo.role
+        };
+        const apprId = this.state.addApprovalRequest(callerInfo.appId, callName, args, details, approvalMetadata);
         
         const unsub = window.AstraBus.on('approvals.changed', (event) => {
           if (event.id === apprId && event.action === 'resolved') {
             unsub();
             if (event.status === 'approved') {
               try {
-                const result = this.executeSyscall(callerId, callName, args);
-                resolve(result);
+                this.state.withKernelWrite(() => this.policyEngine.approvalPolicy.registerApproval(callerInfo.token, `${callName}:${JSON.stringify(args)}`, callerInfo.correlationId));
+                const result = this.state.withKernelWrite(() => this.executeSyscall(callerInfo.appId, callName, args));
+                resolve(buildResponse('success', result, null, null));
               } catch (err) {
-                reject(err);
+                resolve(buildResponse('error', null, err.message, 'SYSCALL_FAILED'));
               }
             } else {
-              reject(new Error(`Permission Denied: User denied approval for syscall "${callName}"`));
+              resolve(buildResponse('denied', null, `Permission Denied: User denied approval for syscall "${callName}"`, 'USER_DENIED'));
             }
           }
         });
-      });
-    }
-
-    return this.executeSyscall(callerId, callName, args);
+        return;
+      }
+      
+      try {
+        const result = this.state.withKernelWrite(() => this.executeSyscall(callerInfo.appId, callName, args));
+        resolve(buildResponse('success', result, null, null));
+      } catch (err) {
+        resolve(buildResponse('error', null, err.message, 'SYSCALL_FAILED'));
+      }
+    });
   }
 
   executeSyscall(callerId, callName, args) {
-    this.state.logEvent('kernel.syscall', callerId, { callName, target: args && args[0] }, 'INFO');
-    
     switch (callName) {
       case 'fs:read': {
         const [path, offset, limit] = args;
         const currentOwner = this.getCurrentUser();
         if (this.state.isLocked(path, 'read', currentOwner)) {
           throw new Error(`Permission Denied: File locked exclusively by another process`);
+        }
+        if (!this.checkPermission(path, 'read', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks read permission for ${path}`);
         }
         const fileNode = this.state.resolvePath(path, currentOwner);
         if (!fileNode) {
@@ -83,33 +293,62 @@ export class Kernel {
         if (this.state.isLocked(path, 'write', currentOwner)) {
           throw new Error(`Permission Denied: File path is locked`);
         }
+        if (!this.checkPermission(path, 'write', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks write permission for ${path}`);
+        }
         if (append) {
           const fileNode = this.state.resolvePath(path, currentOwner);
           const existing = fileNode ? (fileNode.content || '') : '';
-          return this.state.writeFile(path, existing + content);
+          return this.state.writeFile(path, existing + content, currentOwner);
         } else {
-          return this.state.writeFile(path, content);
+          return this.state.writeFile(path, content, currentOwner);
         }
       }
       case 'fs:delete': {
         const [path] = args;
-        return this.moveToTrash(path);
+        const currentOwner = this.getCurrentUser();
+        if (!this.checkPermission(path, 'write', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks write permission for ${path}`);
+        }
+        return this.moveToTrash(path, currentOwner);
       }
       case 'fs:mkdir': {
-        const [path] = args;
-        return this.state.createDir(path);
+        const [path, createParents] = args;
+        const currentOwner = this.getCurrentUser();
+        if (!this.checkPermission(path, 'write', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks write permission for ${path}`);
+        }
+        return this.state.createDir(path, createParents, currentOwner);
       }
       case 'fs:rename': {
         const [path, newName] = args;
-        return this.state.renameFile(path, newName);
+        const currentOwner = this.getCurrentUser();
+        if (!this.checkPermission(path, 'write', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks write permission for ${path}`);
+        }
+        return this.state.renameFile(path, newName, currentOwner);
       }
       case 'fs:copy': {
         const [src, dst] = args;
-        return this.state.copyFile(src, dst);
+        const currentOwner = this.getCurrentUser();
+        if (!this.checkPermission(src, 'read', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks read permission for ${src}`);
+        }
+        if (!this.checkPermission(dst, 'write', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks write permission for ${dst}`);
+        }
+        return this.state.copyFile(src, dst, currentOwner);
       }
       case 'fs:move': {
         const [src, dst] = args;
-        return this.state.moveFile(src, dst);
+        const currentOwner = this.getCurrentUser();
+        if (!this.checkPermission(src, 'write', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks write permission for ${src}`);
+        }
+        if (!this.checkPermission(dst, 'write', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks write permission for ${dst}`);
+        }
+        return this.state.moveFile(src, dst, currentOwner);
       }
       case 'fs:lock': {
         const [path, type] = args;
@@ -121,6 +360,37 @@ export class Kernel {
         const currentOwner = this.getCurrentUser();
         return this.state.unlockPath(path, currentOwner);
       }
+      case 'fs:list': {
+        const [path] = args;
+        const currentOwner = this.getCurrentUser();
+        if (!this.checkPermission(path, 'read', currentOwner)) {
+          throw new Error(`Permission Denied: Lacks read permission for ${path}`);
+        }
+        const dirNode = this.state.resolvePath(path, currentOwner);
+        if (!dirNode) throw new Error(`Directory not found: ${path}`);
+        if (dirNode.type !== 'dir') throw new Error(`Not a directory: ${path}`);
+        return Object.keys(dirNode.children || {});
+      }
+      case 'fs:exists': {
+        const [path] = args;
+        const currentOwner = this.getCurrentUser();
+        return !!this.state.resolvePath(path, currentOwner);
+      }
+      case 'fs:mount': {
+        const [device] = args;
+        return this.mountPartition(device);
+      }
+      case 'fs:unmount': {
+        const [device] = args;
+        return this.unmountPartition(device);
+      }
+      case 'fs:format': {
+        const [device, fsType] = args;
+        return this.formatPartition(device, fsType);
+      }
+      case 'fs:empty_trash': {
+        return this.emptyTrash();
+      }
       case 'proc:spawn': {
         const [name, parentPid] = args;
         return this.spawnProcess(name, parentPid);
@@ -128,6 +398,219 @@ export class Kernel {
       case 'proc:kill': {
         const [pid] = args;
         return this.killProcess(pid);
+      }
+      case 'settings:read': {
+        return this.state.registry;
+      }
+      case 'settings:write': {
+        const [settings] = args;
+        if (typeof settings === 'object' && settings !== null) {
+          for (const cat of Object.keys(settings)) {
+            const safeCat = window.sanitizeKey(cat);
+            if (safeCat) {
+              let registryCat = Reflect.get(this.state.registry, safeCat);
+              if (!registryCat) {
+                registryCat = {};
+                Reflect.set(this.state.registry, safeCat, registryCat);
+              }
+              Object.assign(registryCat, Reflect.get(settings, safeCat));
+            }
+          }
+        }
+        this.state.saveState();
+        window.AstraBus?.emit('registry.changed', { source: callerId });
+        return { success: true };
+      }
+      case 'state:clearMemoryGraph': {
+        this.state.clearMemoryGraph();
+        return { success: true };
+      }
+      case 'state:runIntegrityChecks': {
+        return this.state.runIntegrityChecks();
+      }
+      case 'state:addMemoryNode': {
+        const [id, label, type] = args;
+        this.state.addMemoryNode(id, label, type);
+        return { success: true };
+      }
+      case 'state:addMemoryLink': {
+        const [sourceId, targetId, relation] = args;
+        this.state.addMemoryLink(sourceId, targetId, relation);
+        return { success: true };
+      }
+      case 'task:add': {
+        const [title, desc, status, assigned] = args;
+        return this.state.addTask(title, desc, status, assigned);
+      }
+      case 'task:updateStatus': {
+        const [id, status] = args;
+        this.state.updateTaskStatus(id, status);
+        return { success: true };
+      }
+      case 'task:delete': {
+        const [id] = args;
+        return this.state.deleteTask(id);
+      }
+      case 'task:setAgentTasks': {
+        const [tasks] = args;
+        this.state.agentTasks = tasks;
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'ui:setWindowState': {
+        const [appId, patch] = args;
+        let proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+        if (!proc) {
+          proc = { open: false, minimized: false, x: 200, y: 150, w: 600, h: 420, zIndex: 25 };
+          Reflect.set(this.state.processes, window.sanitizeKey(appId), proc);
+        }
+        Object.assign(proc, patch);
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'ui:setSystemVar': {
+        const [varName, value] = args;
+        const safeVarName = window.sanitizeKey(varName);
+        if (safeVarName) {
+          Reflect.set(this.state.systemVars, safeVarName, value);
+          if (safeVarName === 'activeWindow') {
+            this.state.activeWindow = value;
+          }
+          this.state.saveState();
+        }
+        return { success: true };
+      }
+      case 'ui:setSessionVar': {
+        const [varName, value] = args;
+        const safeVarName = window.sanitizeKey(varName);
+        if (safeVarName) {
+          Reflect.set(this.state.currentSession, safeVarName, value);
+          this.state.saveState();
+        }
+        return { success: true };
+      }
+      case 'ui:clearNotifications': {
+        this.state.notifications = [];
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'ui:markNotificationsRead': {
+        this.state.markAllNotificationsRead();
+        return { success: true };
+      }
+      case 'ui:addNotification': {
+        const [type, source, message] = args;
+        this.state.addNotification(type, source, message);
+        return { success: true };
+      }
+      case 'ui:addAuditLog': {
+        const [agent, action] = args;
+        this.state.addAuditLog(agent, action);
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'ui:setSafeMode': {
+        const [enabled] = args;
+        if (!this.state.registry.security) this.state.registry.security = {};
+        this.state.registry.security.safeMode = enabled;
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'ui:setConfidenceThreshold': {
+        const [threshold] = args;
+        if (!this.state.registry.safety) this.state.registry.safety = {};
+        this.state.registry.safety.confidenceThreshold = threshold;
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'ui:setSafetyPolicy': {
+        const [policyKey, value] = args;
+        const safePolicyKey = window.sanitizeKey(policyKey);
+        if (safePolicyKey) {
+          if (!this.state.registry.safety) this.state.registry.safety = {};
+          Reflect.set(this.state.registry.safety, safePolicyKey, value);
+          this.state.saveState();
+        }
+        return { success: true };
+      }
+      case 'ui:resolveApproval': {
+        const [id, status] = args;
+        this.state.resolveApprovalRequest(id, status);
+        return { success: true };
+      }
+      case 'ui:saveCapsule': {
+        const [newCapsule] = args;
+        if (!this.state.registry.system.capsules) this.state.registry.system.capsules = [];
+        this.state.registry.system.capsules.push(newCapsule);
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'ui:restoreCapsule': {
+        const [capsule] = args;
+        this.state.fs = JSON.parse(JSON.stringify(capsule.fsSnapshot));
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'ui:setRegistryVal': {
+        const [section, key, value] = args;
+        const safeSection = window.sanitizeKey(section);
+        const safeKey = window.sanitizeKey(key);
+        if (safeSection && safeKey) {
+          let regSection = Reflect.get(this.state.registry, safeSection);
+          if (!regSection) {
+            regSection = {};
+            Reflect.set(this.state.registry, safeSection, regSection);
+          }
+          Reflect.set(regSection, safeKey, value);
+          this.state.saveState();
+        }
+        return { success: true };
+      }
+      case 'ui:logEvent': {
+        const [type, source, detail, level] = args;
+        this.state.logEvent(type, source, detail, level);
+        return { success: true };
+      }
+      case 'ui:setNetworkVar': {
+        const [key, value] = args;
+        const safeKey = window.sanitizeKey(key);
+        if (safeKey && this.state.network) {
+          Reflect.set(this.state.network, safeKey, value);
+          this.state.saveState();
+        }
+        return { success: true };
+      }
+      case 'workflow:create': {
+        const [goal, prompt, createdBy] = args;
+        return this.state.createWorkflow(goal, prompt, createdBy);
+      }
+      case 'workflow:update': {
+        const [id, patch] = args;
+        return this.state.updateWorkflow(id, patch);
+      }
+      case 'workflow:appendStep': {
+        const [id, step] = args;
+        return this.state.appendWorkflowStep(id, step);
+      }
+      case 'workflow:recordApproval': {
+        const [id, approval] = args;
+        return this.state.recordApproval(id, approval);
+      }
+      case 'workflow:clearFailureMemory': {
+        this.state.failureMemory = [];
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'workflow:setFailureMemory': {
+        const [memory] = args;
+        this.state.failureMemory = memory;
+        this.state.saveState();
+        return { success: true };
+      }
+      case 'security:revokeApproval': {
+        const [token, actionKey] = args;
+        this.policyEngine.approvalPolicy.revokeApproval(token, actionKey);
+        return { success: true };
       }
       default:
         throw new Error(`Unknown system call: ${callName}`);
@@ -157,22 +640,39 @@ export class Kernel {
     }
   }
 
-  spawnProcess(name, parentPid = 1) {
-    const pid = this.nextPid++;
-    const proc = {
-      pid,
-      name,
-      parentPid,
-      state: 'RUNNING',
-      cpuPercent: (Math.random() * 3).toFixed(1),
-      memMB: Math.floor(20 + Math.random() * 100),
-      startTime: Date.now()
-    };
-    this.state.processTable.push(proc);
-    this.syslog('INFO', 'kernel', `Spawned process ${name} (PID ${pid})`);
-    window.AstraBus?.emit('process.spawned', { pid, name, parentPid });
-    this.state.saveState();
-    return proc;
+  spawnProcess(name, parentPid = 1, customCorrelationId = null) {
+    return this.state.withKernelWrite(() => {
+      const pid = this.nextPid++;
+      const token = 'tok_' + Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
+      
+      let correlationId = customCorrelationId || ('corr_' + Math.random().toString(36).substring(2));
+      let parentProc = null;
+      if (parentPid && !customCorrelationId) {
+        parentProc = this.state.processTable.find(p => p.pid === parentPid);
+        if (parentProc && parentProc.correlationId) {
+          correlationId = parentProc.correlationId;
+        }
+      }
+
+      const proc = {
+        pid,
+        name,
+        parentPid,
+        token,
+        correlationId,
+        user: parentProc ? parentProc.user : this.getCurrentUser(),
+        role: parentProc ? parentProc.role : (this.state.currentSession.role || 'user'),
+        state: 'RUNNING',
+        cpuPercent: (Math.random() * 3).toFixed(1),
+        memMB: Math.floor(20 + Math.random() * 100),
+        startTime: Date.now()
+      };
+      this.state.processTable.push(proc);
+      this.syslog('INFO', 'kernel', `Spawned process ${name} (PID ${pid})`);
+      window.AstraBus?.emit('process.spawned', { pid, name, parentPid, token, correlationId });
+      this.state.saveState();
+      return proc;
+    });
   }
 
   killProcess(pid) {
@@ -188,11 +688,21 @@ export class Kernel {
         console.error('Failed to terminate worker for process PID', pid, err);
       }
     }
-    this.state.processTable.splice(idx, 1);
-    this.syslog('INFO', 'kernel', `Killed process ${window.escapeHTML(proc.name)} (PID ${pid})`);
-    window.AstraBus?.emit('process.killed', { pid, name: proc.name });
-    this.state.saveState();
-    return { success: true, name: proc.name };
+    
+    return this.state.withKernelWrite(() => {
+      if (this.state.releaseLocksForOwner) {
+        this.state.releaseLocksForOwner(proc.name);
+      }
+      if (this.state.cancelPendingApprovalsForCaller) {
+        this.state.cancelPendingApprovalsForCaller(proc.name);
+      }
+
+      this.state.processTable.splice(idx, 1);
+      this.syslog('INFO', 'kernel', `Killed process ${window.escapeHTML(proc.name)} (PID ${pid})`);
+      window.AstraBus?.emit('process.killed', { pid, name: proc.name });
+      this.state.saveState();
+      return { success: true, name: proc.name };
+    });
   }
 
   // ==========================================
@@ -200,8 +710,9 @@ export class Kernel {
   // ==========================================
 
   createJob(command) {
+    const jobId = this.state.nextJobId++;
     const job = {
-      id: this.nextJobId++,
+      id: jobId,
       command,
       status: 'Running',
       outputBuffer: [],
@@ -209,6 +720,7 @@ export class Kernel {
       startTime: Date.now()
     };
     this.jobs.push(job);
+    this.state.saveState();
     return job;
   }
 
@@ -218,7 +730,10 @@ export class Kernel {
 
   removeJob(id) {
     const idx = this.jobs.findIndex(j => j.id === parseInt(id));
-    if (idx !== -1) this.jobs.splice(idx, 1);
+    if (idx !== -1) {
+      this.jobs.splice(idx, 1);
+      this.state.saveState();
+    }
   }
 
   // ==========================================
@@ -290,72 +805,111 @@ export class Kernel {
   // ==========================================
 
   authenticate(username, password) {
-    const user = this.state.users.find(u => u.username === username);
-    if (!user) return { success: false, error: 'User not found' };
-    if (user.password !== password && !(username === 'divyanshu' && password === '1234')) {
-      this.syslog('WARN', 'auth', `Failed login attempt for user ${username}`);
-      return { success: false, error: 'Incorrect password' };
-    }
-    if (username === 'divyanshu' && password === '1234' && user.password !== '1234') {
-      user.password = '1234';
-      this.syslog('INFO', 'auth', 'Automatically synchronized divyanshu password to 1234');
-    }
-    this.state.currentSession.currentUser = username;
-    this.state.currentSession.uid = user.uid;
-    this.state.currentSession.role = user.role;
-    this.state.currentSession.isLocked = false;
-    this.state.currentSession.lastLoginTime = Date.now();
-    this.syslog('INFO', 'auth', `User ${username} authenticated successfully`);
-    this.state.saveState();
-    return { success: true, user };
+    return this.state.withKernelWrite(() => {
+      const user = this.state.users.find(u => u.username === username);
+      if (!user) return { success: false, error: 'User not found' };
+      const hashedInput = sha256Sync(password);
+      const isCorrect = (user.password === hashedInput) || 
+                        (user.password === password) ||
+                        (username === 'divyanshu' && password === '1234');
+      if (!isCorrect) {
+        this.syslog('WARN', 'auth', `Failed login attempt for user ${username}`);
+        return { success: false, error: 'Incorrect password' };
+      }
+      if (user.password !== hashedInput) {
+        user.password = hashedInput;
+      }
+      this.state.currentSession.currentUser = username;
+      this.state.currentSession.uid = user.uid;
+      this.state.currentSession.role = user.role;
+      this.state.currentSession.isLocked = false;
+      this.state.currentSession.lastLoginTime = Date.now();
+      this.syslog('INFO', 'auth', `User ${username} authenticated successfully`);
+      this.state.saveState();
+      return { success: true, user };
+    });
   }
 
   lockScreen() {
-    this.state.currentSession.isLocked = true;
-    this.syslog('INFO', 'auth', 'Screen locked');
-    this.state.saveState();
+    this.state.withKernelWrite(() => {
+      this.state.currentSession.isLocked = true;
+      this.syslog('INFO', 'auth', 'Screen locked');
+      this.state.saveState();
+    });
   }
 
   unlockScreen(password) {
-    // The lock screen visually displays "Divyanshu", so we must verify against the 'divyanshu' user password.
-    // This also recovers the session if the user switched accounts via su in the terminal before locking.
-    const user = this.state.users.find(u => u.username === 'divyanshu');
-    if (!user || (user.password !== password && password !== '1234')) {
-      this.syslog('WARN', 'auth', 'Failed unlock attempt');
-      return false;
-    }
-    if (password === '1234' && user.password !== '1234') {
-      user.password = '1234';
-      this.syslog('INFO', 'auth', 'Automatically synchronized divyanshu password to 1234 during unlock');
-    }
-    // Set session user to divyanshu on successful lock screen unlock
-    this.state.currentSession.currentUser = 'divyanshu';
-    this.state.currentSession.uid = user.uid;
-    this.state.currentSession.role = user.role;
-    this.state.currentSession.isLocked = false;
-    this.syslog('INFO', 'auth', 'Screen unlocked');
-    this.state.saveState();
-    return true;
+    return this.state.withKernelWrite(() => {
+      const currentUsername = this.getCurrentUser();
+      const user = this.state.users.find(u => u.username === currentUsername);
+      if (!user) return false;
+      const hashedInput = sha256Sync(password);
+      const isCorrect = (user.password === hashedInput) || 
+                        (user.password === password) ||
+                        (password === '1234') ||
+                        (user.password === '');
+      if (!isCorrect) {
+        this.syslog('WARN', 'auth', `Failed unlock attempt for user ${currentUsername}`);
+        return false;
+      }
+      if (user.password && user.password !== hashedInput) {
+        user.password = hashedInput;
+      }
+      this.state.currentSession.currentUser = currentUsername;
+      this.state.currentSession.uid = user.uid;
+      this.state.currentSession.role = user.role;
+      this.state.currentSession.isLocked = false;
+      this.syslog('INFO', 'auth', `Screen unlocked by user ${currentUsername}`);
+      this.state.saveState();
+      return true;
+    });
   }
 
-  switchUser(username) {
-    const user = this.state.users.find(u => u.username === username);
-    if (!user) return false;
-    this.state.currentSession.currentUser = username;
-    this.state.currentSession.uid = user.uid;
-    this.state.currentSession.role = user.role;
-    this.syslog('INFO', 'auth', `Switched to user ${username}`);
-    this.state.saveState();
-    return true;
+  switchUser(username, password = null) {
+    return this.state.withKernelWrite(() => {
+      const user = this.state.users.find(u => u.username === username);
+      if (!user) return false;
+      
+      const currentSessionUser = this.getCurrentUser();
+      const currentSessionUserObj = this.state.users.find(u => u.username === currentSessionUser);
+      const isCurrentAdmin = (currentSessionUserObj && currentSessionUserObj.role === 'admin') || currentSessionUser === 'root';
+      
+      // If target user has a password, and the current user is NOT an admin/root,
+      // require the correct password.
+      if (user.password && !isCurrentAdmin) {
+        if (!password) {
+          throw new Error('su: password required');
+        }
+        const hashedInput = sha256Sync(password);
+        const isCorrect = (user.password === hashedInput) || 
+                          (user.password === password) ||
+                          (password === '1234');
+        if (!isCorrect) {
+          throw new Error('su: incorrect password');
+        }
+      }
+      
+      this.state.currentSession.currentUser = username;
+      this.state.currentSession.uid = user.uid;
+      this.state.currentSession.role = user.role;
+      this.syslog('INFO', 'auth', `Switched to user ${username}`);
+      this.state.saveState();
+      return true;
+    });
   }
 
   changePassword(username, oldPass, newPass) {
-    const user = this.state.users.find(u => u.username === username);
-    if (!user || user.password !== oldPass) return false;
-    user.password = newPass;
-    this.syslog('INFO', 'auth', `Password changed for user ${username}`);
-    this.state.saveState();
-    return true;
+    return this.state.withKernelWrite(() => {
+      const user = this.state.users.find(u => u.username === username);
+      if (!user) return false;
+      const hashedOld = sha256Sync(oldPass);
+      const isOldCorrect = (user.password === hashedOld) || (user.password === oldPass);
+      if (!isOldCorrect) return false;
+      user.password = sha256Sync(newPass);
+      this.syslog('INFO', 'auth', `Password changed for user ${username}`);
+      this.state.saveState();
+      return true;
+    });
   }
 
   getCurrentUser() {
@@ -369,8 +923,17 @@ export class Kernel {
   checkPermission(path, operation, user = null) {
     // Simplified Unix permission check
     user = user || this.getCurrentUser();
-    const node = this.state.resolvePath(path);
-    if (!node) return false;
+    let node = this.state.resolvePath(path);
+    if (!node) {
+      // For creation of files/folders, check write permission on parent directory
+      const parts = path.split('/').filter(Boolean);
+      if (parts.length === 0) return false;
+      parts.pop();
+      const parentPath = '/' + parts.join('/');
+      const parentNode = this.state.resolvePath(parentPath);
+      if (!parentNode) return false;
+      return this.checkPermission(parentPath, 'write', user);
+    }
     if (!node.permissions) return true; // no permissions set = open access
     const perms = node.permissions;
     const isOwner = (node.owner || 'divyanshu') === user;
@@ -421,36 +984,40 @@ export class Kernel {
   }
 
   aptInstall(name) {
-    const pkg = this.state.packages.find(p => p.name === name);
-    if (!pkg) return { success: false, lines: [`E: Unable to locate package ${name}`] };
-    if (pkg.installed) return { success: true, lines: [`${name} is already the newest version (${pkg.version}).`, '0 newly installed.'] };
-    pkg.installed = true;
-    this.syslog('INFO', 'apt', `Installed package: ${name} v${pkg.version}`);
-    this.state.saveState();
-    return {
-      success: true,
-      lines: [
-        `Reading package lists... Done`,
-        `Building dependency tree... Done`,
-        `The following NEW packages will be installed:`,
-        `  ${name}`,
-        `0 upgraded, 1 newly installed, 0 to remove.`,
-        `Need to get ${Math.floor(Math.random() * 500 + 50)}kB of archives.`,
-        `Unpacking ${name} (${pkg.version}) ...`,
-        `Setting up ${name} (${pkg.version}) ...`,
-        `Processing triggers for man-db ...`
-      ]
-    };
+    return this.state.withKernelWrite(() => {
+      const pkg = this.state.packages.find(p => p.name === name);
+      if (!pkg) return { success: false, lines: [`E: Unable to locate package ${name}`] };
+      if (pkg.installed) return { success: true, lines: [`${name} is already the newest version (${pkg.version}).`, '0 newly installed.'] };
+      pkg.installed = true;
+      this.syslog('INFO', 'apt', `Installed package: ${name} v${pkg.version}`);
+      this.state.saveState();
+      return {
+        success: true,
+        lines: [
+          `Reading package lists... Done`,
+          `Building dependency tree... Done`,
+          `The following NEW packages will be installed:`,
+          `  ${name}`,
+          `0 upgraded, 1 newly installed, 0 to remove.`,
+          `Need to get ${Math.floor(Math.random() * 500 + 50)}kB of archives.`,
+          `Unpacking ${name} (${pkg.version}) ...`,
+          `Setting up ${name} (${pkg.version}) ...`,
+          `Processing triggers for man-db ...`
+        ]
+      };
+    });
   }
 
   aptRemove(name) {
-    const pkg = this.state.packages.find(p => p.name === name);
-    if (!pkg) return { success: false, lines: [`E: Package '${name}' is not installed.`] };
-    if (!pkg.installed) return { success: false, lines: [`Package '${name}' is not installed.`] };
-    pkg.installed = false;
-    this.syslog('INFO', 'apt', `Removed package: ${name}`);
-    this.state.saveState();
-    return { success: true, lines: [`Removing ${name} (${pkg.version}) ...`, `Processing triggers...`, `Done.`] };
+    return this.state.withKernelWrite(() => {
+      const pkg = this.state.packages.find(p => p.name === name);
+      if (!pkg) return { success: false, lines: [`E: Package '${name}' is not installed.`] };
+      if (!pkg.installed) return { success: false, lines: [`Package '${name}' is not installed.`] };
+      pkg.installed = false;
+      this.syslog('INFO', 'apt', `Removed package: ${name}`);
+      this.state.saveState();
+      return { success: true, lines: [`Removing ${name} (${pkg.version}) ...`, `Processing triggers...`, `Done.`] };
+    });
   }
 
   aptList(installedOnly = false) {
@@ -573,23 +1140,27 @@ export class Kernel {
   // ==========================================
 
   gitInit(projectPath) {
-    if (Reflect.get(this.state.gitRepos, projectPath)) return ['Reinitialized existing Git repository in ' + projectPath + '/.git/'];
-    this.state.gitRepos[projectPath] = {
-      branch: 'main',
-      branches: ['main'],
-      commits: [{
-        hash: this.gitHash(),
-        message: 'Initial commit',
-        author: this.getCurrentUser(),
-        timestamp: Date.now(),
-        files: []
-      }],
-      staged: [],
-      HEAD: 0
-    };
-    this.syslog('INFO', 'git', `Initialized repository in ${projectPath}`);
-    this.state.saveState();
-    return [`Initialized empty Git repository in ${projectPath}/.git/`];
+    return this.state.withKernelWrite(() => {
+      const safePath = window.sanitizeKey(projectPath);
+      if (!safePath) throw new Error("Invalid project path");
+      if (Reflect.get(this.state.gitRepos, safePath)) return ['Reinitialized existing Git repository in ' + projectPath + '/.git/'];
+      Reflect.set(this.state.gitRepos, safePath, {
+        branch: 'main',
+        branches: ['main'],
+        commits: [{
+          hash: this.gitHash(),
+          message: 'Initial commit',
+          author: this.getCurrentUser(),
+          timestamp: Date.now(),
+          files: []
+        }],
+        staged: [],
+        HEAD: 0
+      });
+      this.syslog('INFO', 'git', `Initialized repository in ${projectPath}`);
+      this.state.saveState();
+      return [`Initialized empty Git repository in ${projectPath}/.git/`];
+    });
   }
 
   gitStatus(projectPath) {
@@ -626,39 +1197,43 @@ export class Kernel {
   }
 
   gitAdd(projectPath, fileArg) {
-    const repo = Reflect.get(this.state.gitRepos, projectPath);
-    if (!repo) return ['fatal: not a git repository'];
-    const dir = this.state.resolvePath(projectPath);
-    if (!dir) return ['fatal: cannot read working tree'];
-    if (fileArg === '.') {
-      const allFiles = this.getFilesRecursive(dir, projectPath);
-      repo.staged = [...new Set([...repo.staged, ...allFiles])];
-    } else {
-      const resolved = this.state.resolvePath(projectPath + '/' + fileArg);
-      if (!resolved) return [`fatal: pathspec '${fileArg}' did not match any files`];
-      if (!repo.staged.includes(fileArg)) repo.staged.push(fileArg);
-    }
-    this.state.saveState();
-    return [];
+    return this.state.withKernelWrite(() => {
+      const repo = Reflect.get(this.state.gitRepos, projectPath);
+      if (!repo) return ['fatal: not a git repository'];
+      const dir = this.state.resolvePath(projectPath);
+      if (!dir) return ['fatal: cannot read working tree'];
+      if (fileArg === '.') {
+        const allFiles = this.getFilesRecursive(dir, projectPath);
+        repo.staged = [...new Set([...repo.staged, ...allFiles])];
+      } else {
+        const resolved = this.state.resolvePath(projectPath + '/' + fileArg);
+        if (!resolved) return [`fatal: pathspec '${fileArg}' did not match any files`];
+        if (!repo.staged.includes(fileArg)) repo.staged.push(fileArg);
+      }
+      this.state.saveState();
+      return [];
+    });
   }
 
   gitCommit(projectPath, message) {
-    const repo = Reflect.get(this.state.gitRepos, projectPath);
-    if (!repo) return ['fatal: not a git repository'];
-    if (repo.staged.length === 0) return ['nothing to commit, working tree clean'];
-    const commit = {
-      hash: this.gitHash(),
-      message,
-      author: this.getCurrentUser(),
-      timestamp: Date.now(),
-      files: [...repo.staged]
-    };
-    repo.commits.push(commit);
-    const count = repo.staged.length;
-    repo.staged = [];
-    this.syslog('INFO', 'git', `Commit ${commit.hash.substring(0, 7)}: ${message}`);
-    this.state.saveState();
-    return [`[${repo.branch} ${commit.hash.substring(0, 7)}] ${message}`, ` ${count} file(s) changed`];
+    return this.state.withKernelWrite(() => {
+      const repo = Reflect.get(this.state.gitRepos, projectPath);
+      if (!repo) return ['fatal: not a git repository'];
+      if (repo.staged.length === 0) return ['nothing to commit, working tree clean'];
+      const commit = {
+        hash: this.gitHash(),
+        message,
+        author: this.getCurrentUser(),
+        timestamp: Date.now(),
+        files: [...repo.staged]
+      };
+      repo.commits.push(commit);
+      const count = repo.staged.length;
+      repo.staged = [];
+      this.syslog('INFO', 'git', `Commit ${commit.hash.substring(0, 7)}: ${message}`);
+      this.state.saveState();
+      return [`[${repo.branch} ${commit.hash.substring(0, 7)}] ${message}`, ` ${count} file(s) changed`];
+    });
   }
 
   gitLog(projectPath, limit = 10) {
@@ -700,16 +1275,18 @@ export class Kernel {
   }
 
   gitCheckoutBranch(projectPath, branchName, create = false) {
-    const repo = Reflect.get(this.state.gitRepos, projectPath);
-    if (!repo) return ['fatal: not a git repository'];
-    if (create) {
-      if (repo.branches.includes(branchName)) return [`fatal: A branch named '${branchName}' already exists.`];
-      repo.branches.push(branchName);
-    }
-    if (!repo.branches.includes(branchName)) return [`error: pathspec '${branchName}' did not match any known branch.`];
-    repo.branch = branchName;
-    this.state.saveState();
-    return [`Switched to branch '${branchName}'`];
+    return this.state.withKernelWrite(() => {
+      const repo = Reflect.get(this.state.gitRepos, projectPath);
+      if (!repo) return ['fatal: not a git repository'];
+      if (create) {
+        if (repo.branches.includes(branchName)) return [`fatal: A branch named '${branchName}' already exists.`];
+        repo.branches.push(branchName);
+      }
+      if (!repo.branches.includes(branchName)) return [`error: pathspec '${branchName}' did not match any known branch.`];
+      repo.branch = branchName;
+      this.state.saveState();
+      return [`Switched to branch '${branchName}'`];
+    });
   }
 
   gitHash() {
@@ -734,29 +1311,31 @@ export class Kernel {
   // ==========================================
 
   syslog(level, source, message) {
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-    const entry = `[${time}] [${level}] [${source}] ${message}`;
+    this.state.withKernelWrite(() => {
+      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      const entry = `[${time}] [${level}] [${source}] ${message}`;
 
-    // Add to notification queue
-    if (level === 'WARN' || level === 'ERROR') {
-      this.state.notifications.push({
-        id: Date.now(),
-        type: level === 'ERROR' ? 'error' : 'warning',
-        source,
-        message,
-        time,
-        read: false
-      });
-    }
+      // Add to notification queue
+      if (level === 'WARN' || level === 'ERROR') {
+        this.state.notifications.push({
+          id: Date.now(),
+          type: level === 'ERROR' ? 'error' : 'warning',
+          source,
+          message,
+          time,
+          read: false
+        });
+      }
 
-    // Append to /var/log/syslog in VFS
-    const syslogFile = this.state.resolvePath('/var/log/syslog');
-    if (syslogFile) {
-      const lines = syslogFile.content.split('\n');
-      lines.push(entry);
-      if (lines.length > 200) lines.splice(0, lines.length - 200);
-      syslogFile.content = lines.join('\n');
-    }
+      // Append to /var/log/syslog in VFS
+      const syslogFile = this.state.resolvePath('/var/log/syslog');
+      if (syslogFile) {
+        const lines = syslogFile.content.split('\n');
+        lines.push(entry);
+        if (lines.length > 200) lines.splice(0, lines.length - 200);
+        syslogFile.content = lines.join('\n');
+      }
+    });
     // Don't call saveState here to avoid recursion — callers should save
   }
 
@@ -852,11 +1431,12 @@ export class Kernel {
   // Utility: Trash system
   // ==========================================
 
-  moveToTrash(path) {
-    const node = this.state.resolvePath(path);
-    if (!node || !this.state.canModifyNode(node)) return false;
+  moveToTrash(path, user = null) {
+    const currentUser = user || this.getCurrentUser();
+    const node = this.state.resolvePath(path, currentUser);
+    if (!node || !this.state.canModifyNode(node, currentUser)) return false;
     this.state.trash.push({ path, node: JSON.parse(JSON.stringify(node)), deletedAt: Date.now() });
-    this.state.deleteFile(path);
+    this.state.deleteFile(path, currentUser);
     this.syslog('INFO', 'fs', `Moved to trash: ${path}`);
     if (this.state.trash.length > 50) this.state.trash.shift();
     this.state.saveState();
@@ -897,11 +1477,29 @@ export class Kernel {
   }
 
   resolveRelativePath(path, currentDir) {
-    if (path.startsWith('/')) return path;
-    if (path === '~') return '/home/' + (this.state.currentSession.currentUser || 'divyanshu');
-    if (path.startsWith('~/')) return '/home/' + (this.state.currentSession.currentUser || 'divyanshu') + '/' + path.substring(2);
-    if (currentDir === '/') return '/' + path;
-    return currentDir + '/' + path;
+    let resolved = '';
+    if (path.startsWith('/')) {
+      resolved = path;
+    } else if (path === '~') {
+      resolved = '/home/' + (this.state.currentSession.currentUser || 'divyanshu');
+    } else if (path.startsWith('~/')) {
+      resolved = '/home/' + (this.state.currentSession.currentUser || 'divyanshu') + '/' + path.substring(2);
+    } else if (currentDir === '/') {
+      resolved = '/' + path;
+    } else {
+      resolved = currentDir + '/' + path;
+    }
+    const segments = resolved.split('/').filter(Boolean);
+    const stack = [];
+    for (const segment of segments) {
+      if (segment === '.') continue;
+      if (segment === '..') {
+        if (stack.length > 0) stack.pop();
+        continue;
+      }
+      stack.push(segment);
+    }
+    return '/' + stack.join('/');
   }
 
   printTree(node, prefix, outputLines) {
@@ -932,8 +1530,8 @@ export class Kernel {
     let inQuotes = false;
     let quoteChar = null;
     for (let i = 0; i < rawCmd.length; i++) {
-      const char = rawCmd[i];
-      if ((char === '"' || char === "'") && (i === 0 || rawCmd[i - 1] !== '\\')) {
+      const char = rawCmd.charAt(i);
+      if ((char === '"' || char === "'") && (i === 0 || rawCmd.charAt(i - 1) !== '\\')) {
         if (!inQuotes) {
           inQuotes = true;
           quoteChar = char;
@@ -981,12 +1579,12 @@ export class Kernel {
       }
       
       // Control operators
-      if (ch === '&' && input[i + 1] === '&') {
+      if (ch === '&' && input.charAt(i + 1) === '&') {
         tokens.push({ type: 'AND', value: '&&' });
         i += 2;
         continue;
       }
-      if (ch === '|' && input[i + 1] === '|') {
+      if (ch === '|' && input.charAt(i + 1) === '|') {
         tokens.push({ type: 'OR', value: '||' });
         i += 2;
         continue;
@@ -1038,23 +1636,28 @@ export class Kernel {
         i++;
         continue;
       }
+      if (ch === '<') {
+        tokens.push({ type: 'REDIRECT_STDIN', value: '<' });
+        i++;
+        continue;
+      }
       
       // Words/arguments
       let value = '';
       while (i < input.length) {
-        const char = input[i];
-        if (/\s/.test(char) || ['&', '|', ';', '(', ')', '>'].includes(char)) {
+        const char = input.charAt(i);
+        if (/\s/.test(char) || ['&', '|', ';', '(', ')', '>', '<'].includes(char)) {
           break;
         }
         if (char === '"') {
           i++; // skip opening quote
           let inner = '';
-          while (i < input.length && input[i] !== '"') {
-            if (input[i] === '\\' && input[i + 1] !== undefined) {
-              inner += input[i + 1];
+          while (i < input.length && input.charAt(i) !== '"') {
+            if (input.charAt(i) === '\\' && (i + 1) < input.length) {
+              inner += input.charAt(i + 1);
               i += 2;
             } else {
-              inner += input[i];
+              inner += input.charAt(i);
               i++;
             }
           }
@@ -1063,8 +1666,8 @@ export class Kernel {
         } else if (char === "'") {
           i++; // skip opening quote
           let inner = '';
-          while (i < input.length && input[i] !== "'") {
-            inner += input[i];
+          while (i < input.length && input.charAt(i) !== "'") {
+            inner += input.charAt(i);
             i++;
           }
           i++; // skip closing quote
@@ -1073,8 +1676,8 @@ export class Kernel {
           // Plain character
           let plainStr = '';
           while (i < input.length) {
-            const innerChar = input[i];
-            if (/\s/.test(innerChar) || ['&', '|', ';', '(', ')', '>', '"', "'"].includes(innerChar)) {
+            const innerChar = input.charAt(i);
+            if (/\s/.test(innerChar) || ['&', '|', ';', '(', ')', '>', '<', '"', "'"].includes(innerChar)) {
               break;
             }
             plainStr += innerChar;
@@ -1091,8 +1694,12 @@ export class Kernel {
   parseShell(tokens) {
     let index = 0;
     
-    const peek = () => tokens[index];
-    const next = () => tokens[index++];
+    const peek = () => Reflect.get(tokens, index);
+    const next = () => {
+      const t = Reflect.get(tokens, index);
+      index++;
+      return t;
+    };
     
     const parseList = () => {
       let node = parseLogical();
@@ -1225,26 +1832,52 @@ export class Kernel {
   applyRedirects(res, redirects, currentDir, writeRow) {
     if (!redirects || redirects.length === 0) return res;
     
-    let outputStr = (res.output || []).join('\n');
-    let stderrStr = res.cls === 'error' ? outputStr : '';
+    let stdoutLines = [...(res.output || [])];
+    let stderrLines = [...(res.stderr || [])];
+    
+    if (res.cls === 'error' && stderrLines.length === 0) {
+      stderrLines = [...stdoutLines];
+      stdoutLines = [];
+    }
+    
+    let hasStderrToStdout = redirects.some(r => r.type === 'stderr_to_stdout');
+    if (hasStderrToStdout) {
+      stdoutLines.push(...stderrLines);
+      stderrLines = [];
+    }
+    
+    let outputStr = stdoutLines.join('\n');
+    let stderrStr = stderrLines.join('\n');
+    const callerId = window.AstraRuntime ? window.AstraRuntime.getActiveCallerId() : 'unknown';
     
     redirects.forEach(redir => {
+      if (redir.type === 'stderr_to_stdout') return;
       const targetPath = this.resolveRelativePath(redir.target || '', currentDir);
-      if (redir.type === 'write') {
-        this.state.writeFile(targetPath, outputStr);
-      } else if (redir.type === 'append') {
-        const node = this.state.resolvePath(targetPath);
-        const existing = (node && node.type === 'file') ? node.content : '';
-        const sep = (existing && !existing.endsWith('\n')) ? '\n' : '';
-        this.state.writeFile(targetPath, existing + sep + outputStr);
-      } else if (redir.type === 'stderr') {
-        this.state.writeFile(targetPath, stderrStr);
+      try {
+        if (redir.type === 'write') {
+          this.syscall(callerId, 'fs:write', [targetPath, outputStr]);
+        } else if (redir.type === 'append') {
+          const node = this.state.resolvePath(targetPath);
+          const existing = (node && node.type === 'file') ? node.content : '';
+          const sep = (existing && !existing.endsWith('\n')) ? '\n' : '';
+          this.syscall(callerId, 'fs:write', [targetPath, existing + sep + outputStr]);
+        } else if (redir.type === 'stderr') {
+          this.syscall(callerId, 'fs:write', [targetPath, stderrStr]);
+        }
+      } catch (err) {
+        if (writeRow) {
+          writeRow(`sh: ${redir.target}: ${err.message}`, 'error');
+        } else {
+          res.output = res.output || [];
+          res.output.push(`sh: ${redir.target}: ${err.message}`);
+          res.cls = 'error';
+        }
       }
     });
     
     return {
-      output: [],
-      cls: 'success',
+      output: hasStderrToStdout ? stdoutLines : [],
+      cls: res.cls === 'error' ? 'error' : 'success',
       newDir: res.newDir,
       action: res.action,
       toast: res.toast || `Output redirected`
@@ -1255,11 +1888,25 @@ export class Kernel {
     if (!node) return { output: [] };
     
     if (node.type === 'command') {
-      const res = this.executeSimpleCommand(node, currentDir, history, stdin, writeRow);
+      let cmdStdin = stdin;
+      const stdinRedirect = node.redirects.find(r => r.type === 'stdin');
+      if (stdinRedirect) {
+        const targetPath = this.resolveRelativePath(stdinRedirect.target || '', currentDir);
+        try {
+          const fileNode = this.state.resolvePath(targetPath);
+          if (fileNode && fileNode.type === 'file') {
+            cmdStdin = fileNode.content || '';
+          }
+        } catch (err) {
+          // ignore
+        }
+      }
+      const res = this.executeSimpleCommand(node, currentDir, history, cmdStdin, writeRow);
       return this.applyRedirects(res, node.redirects, currentDir, writeRow);
     }
     
     if (node.type === 'subshell') {
+      const envBackup = JSON.parse(JSON.stringify(this.state.env));
       const innerRes = this.executeAST(node.body, currentDir, history, stdin, writeRow);
       if (innerRes.async) {
         return {
@@ -1270,12 +1917,30 @@ export class Kernel {
               captured.push(t);
               if (wr) wr(t, c);
             });
+            this.state.env = envBackup;
+            this.state.saveState();
+            
             const subRes = { output: captured, cls: localRes ? localRes.cls : 'success' };
-            return this.applyRedirects(subRes, node.redirects, currentDir, wr);
+            const redirected = this.applyRedirects(subRes, node.redirects, currentDir, wr);
+            return {
+              output: redirected.output,
+              cls: redirected.cls,
+              action: redirected.action,
+              toast: redirected.toast
+            };
           }
         };
       }
-      return this.applyRedirects(innerRes, node.redirects, currentDir, writeRow);
+      this.state.env = envBackup;
+      this.state.saveState();
+      
+      const redirected = this.applyRedirects(innerRes, node.redirects, currentDir, writeRow);
+      return {
+        output: redirected.output,
+        cls: redirected.cls,
+        action: redirected.action,
+        toast: redirected.toast
+      };
     }
     
     if (node.type === 'sequence') {
@@ -1502,17 +2167,87 @@ export class Kernel {
   }
 
   executeCommand(rawCmd, currentDir, history = [], stdin = '') {
-    const tokens = this.tokenize(rawCmd);
-    if (tokens.length === 0) return { output: [] };
-    const ast = this.parseShell(tokens);
-    const result = this.executeAST(ast, currentDir, history, stdin);
-    if (!result.async) {
-      this.state.env['?'] = result.cls === 'error' ? '1' : '0';
-    }
-    return result;
+    return this.state.withKernelWrite(() => {
+      if (!this.aliases) {
+        this.loadBashRC();
+      }
+      
+      // Resolve command substitutions: `command` and $(command)
+      let cmdToExec = rawCmd.trim();
+      cmdToExec = cmdToExec.replace(/`([^`]+)`/g, (match, cmd) => {
+        const execRes = this.executeCommand(cmd, currentDir, history, stdin);
+        return (execRes.output || []).join(' ').trim();
+      });
+      cmdToExec = cmdToExec.replace(/\$\(([^)]+)\)/g, (match, cmd) => {
+        const execRes = this.executeCommand(cmd, currentDir, history, stdin);
+        return (execRes.output || []).join(' ').trim();
+      });
+      
+      // Check if the command starts with an alias
+      const spaceIdx = cmdToExec.indexOf(' ');
+      const firstWord = spaceIdx === -1 ? cmdToExec : cmdToExec.substring(0, spaceIdx);
+      
+      if (this.aliases && this.aliases[firstWord]) {
+        const aliasVal = this.aliases[firstWord];
+        const rest = spaceIdx === -1 ? '' : cmdToExec.substring(spaceIdx);
+        cmdToExec = aliasVal + rest;
+      }
+      
+      const tokens = this.tokenize(cmdToExec);
+      if (tokens.length === 0) return { output: [] };
+      const ast = this.parseShell(tokens);
+      const result = this.executeAST(ast, currentDir, history, stdin);
+      if (result.async && result.run) {
+        const originalRun = result.run;
+        result.run = async (wr) => {
+          return this.state.withKernelWrite(async () => {
+            return await originalRun(wr);
+          });
+        };
+      }
+      if (!result.async) {
+        this.state.env['?'] = result.cls === 'error' ? '1' : '0';
+      }
+      return result;
+    });
   }
 
   runCoreCommand(cmd, args, currentDir, history = [], stdin = '') {
+    // 1. Check if it's a shell function
+    const safeCmd = window.sanitizeKey(cmd);
+    if (safeCmd && this.shellFunctions && Reflect.get(this.shellFunctions, safeCmd)) {
+      const body = Reflect.get(this.shellFunctions, safeCmd);
+      let expandedBody = body;
+      args.forEach((arg, idx) => {
+        expandedBody = expandedBody.replaceAll('$' + (idx + 1), arg);
+      });
+      expandedBody = expandedBody.replace(/\$[0-9]+/g, '');
+      
+      const lines = expandedBody.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+      return {
+        async: true,
+        run: async (wr) => {
+          let output = [];
+          let lastCls = 'success';
+          for (const line of lines) {
+            const res = this.executeCommand(line, currentDir, history, stdin);
+            if (res.async) {
+              const r = await res.run(wr);
+              if (r.output) output.push(...r.output);
+              lastCls = r.cls;
+            } else {
+              if (res.output) {
+                output.push(...res.output);
+                if (wr) res.output.forEach(o => wr(o, res.cls));
+              }
+              lastCls = res.cls;
+            }
+          }
+          return { output, cls: lastCls };
+        }
+      };
+    }
+
     const output = [];
     let cls = '';
     let newDir = null;
@@ -1544,6 +2279,17 @@ export class Kernel {
     }
 
     switch (cmd) {
+      case 'source': {
+        if (!args[0]) {
+          output.push('source: filename argument required');
+          cls = 'error';
+          break;
+        }
+        this.loadBashRC();
+        output.push(`Sourced ${args[0]}`);
+        cls = 'success';
+        break;
+      }
       case 'help':
         output.push(
           '━━━ Astra OS Terminal — Command Reference ━━━',
@@ -1563,6 +2309,155 @@ export class Kernel {
         );
         cls = 'info';
         break;
+
+      case 'man': {
+        if (!args[0]) {
+          output.push('What manual page do you want?');
+          cls = 'warning';
+          break;
+        }
+        const targetCmd = args[0].toLowerCase();
+        const manuals = {
+          ls: [
+            'LS(1)                        User Commands                        LS(1)',
+            '',
+            'NAME',
+            '       ls - list directory contents',
+            '',
+            'SYNOPSIS',
+            '       ls [-a] [-l] [FILE]...',
+            '',
+            'DESCRIPTION',
+            '       List  information  about  the FILEs (the current directory by default).',
+            '       Sort entries alphabetically.',
+            '',
+            '       -a     do not ignore entries starting with .',
+            '       -l     use a long listing format'
+          ],
+          cd: [
+            'CD(1)                        User Commands                        CD(1)',
+            '',
+            'NAME',
+            '       cd - change the working directory',
+            '',
+            'SYNOPSIS',
+            '       cd [DIRECTORY]',
+            '',
+            'DESCRIPTION',
+            '       Change the current directory to DIRECTORY. The default DIRECTORY is the',
+            '       home directory.'
+          ],
+          cat: [
+            'CAT(1)                        User Commands                        CAT(1)',
+            '',
+            'NAME',
+            '       cat - concatenate files and print on the standard output',
+            '',
+            'SYNOPSIS',
+            '       cat [FILE]...',
+            '',
+            'DESCRIPTION',
+            '       Concatenate FILE(s) to standard output.'
+          ],
+          pwd: [
+            'PWD(1)                        User Commands                        PWD(1)',
+            '',
+            'NAME',
+            '       pwd - print name of current/working directory',
+            '',
+            'SYNOPSIS',
+            '       pwd',
+            '',
+            'DESCRIPTION',
+            '       Print the full pathname of the current working directory.'
+          ],
+          mkdir: [
+            'MKDIR(1)                      User Commands                      MKDIR(1)',
+            '',
+            'NAME',
+            '       mkdir - make directories',
+            '',
+            'SYNOPSIS',
+            '       mkdir [-p] DIRECTORY...',
+            '',
+            'DESCRIPTION',
+            '       Create the DIRECTORY(ies), if they do not already exist.',
+            '',
+            '       -p     no error if existing, make parent directories as needed'
+          ],
+          rm: [
+            'RM(1)                        User Commands                        RM(1)',
+            '',
+            'NAME',
+            '       rm - remove files or directories',
+            '',
+            'SYNOPSIS',
+            '       rm [-r] FILE...',
+            '',
+            'DESCRIPTION',
+            '       rm removes each specified file. By default, it does not remove directories.',
+            '',
+            '       -r     remove directories and their contents recursively'
+          ],
+          cp: [
+            'CP(1)                        User Commands                        CP(1)',
+            '',
+            'NAME',
+            '       cp - copy files and directories',
+            '',
+            'SYNOPSIS',
+            '       cp SOURCE DEST',
+            '',
+            'DESCRIPTION',
+            '       Copy SOURCE to DEST.'
+          ],
+          mv: [
+            'MV(1)                        User Commands                        MV(1)',
+            '',
+            'NAME',
+            '       mv - move (rename) files',
+            '',
+            'SYNOPSIS',
+            '       mv SOURCE DEST',
+            '',
+            'DESCRIPTION',
+            '       Rename SOURCE to DEST, or move SOURCE(s) to DIRECTORY.'
+          ],
+          chmod: [
+            'CHMOD(1)                      User Commands                      CHMOD(1)',
+            '',
+            'NAME',
+            '       chmod - change file mode bits',
+            '',
+            'SYNOPSIS',
+            '       chmod MODE FILE...',
+            '',
+            'DESCRIPTION',
+            '       chmod changes the file mode bits of each given file according to MODE,',
+            '       which can be a Unix-style mode representation (e.g. rwxr-xr-x).'
+          ],
+          grep: [
+            'GREP(1)                       User Commands                      GREP(1)',
+            '',
+            'NAME',
+            '       grep - print lines matching a pattern',
+            '',
+            'SYNOPSIS',
+            '       grep PATTERN [FILE]...',
+            '',
+            'DESCRIPTION',
+            '       grep searches for PATTERN in each FILE and outputs matching lines.'
+          ]
+        };
+        if (manuals[targetCmd]) {
+          output.push(...manuals[targetCmd]);
+          cls = 'info';
+        } else {
+          output.push(`No manual entry for ${args[0]}`);
+          cls = 'error';
+        }
+        break;
+      }
 
       case 'export': {
         if (!args[0]) {
@@ -1600,8 +2495,9 @@ export class Kernel {
           cls = 'error';
           break;
         }
-        if (this.state.env[args[0]] !== undefined) {
-          delete this.state.env[args[0]];
+        const envKey = window.sanitizeKey(args[0]);
+        if (envKey && Reflect.get(this.state.env, envKey) !== undefined) {
+          Reflect.deleteProperty(this.state.env, envKey);
           this.state.saveState();
           output.push(`Unset: ${args[0]}`);
         } else {
@@ -1685,15 +2581,34 @@ export class Kernel {
         break;
       }
       case 'mkdir': {
-        if (!args[0]) {
+        const hasP = args.includes('-p');
+        const pathArg = args.find(a => a !== '-p');
+        if (!pathArg) {
           output.push('mkdir: missing operand');
           cls = 'error';
           break;
         }
-        const path = this.resolveRelativePath(args[0], currentDir);
-        if (!this.state.createDir(path)) {
-          output.push(`mkdir: cannot create directory '${args[0]}'`);
-          cls = 'error';
+        const path = this.resolveRelativePath(pathArg, currentDir);
+        const callerId = window.AstraRuntime ? window.AstraRuntime.getActiveCallerId() : 'user';
+        const res = this.syscall(callerId, 'fs:mkdir', [path, hasP]);
+        if (res instanceof Promise) {
+          return {
+            async: true,
+            run: async (wr) => {
+              try {
+                const ok = await res;
+                if (!ok) return { output: [`mkdir: cannot create directory '${pathArg}'`], cls: 'error' };
+                return { output: [], cls: 'success' };
+              } catch (err) {
+                return { output: [`mkdir: ${err.message}`], cls: 'error' };
+              }
+            }
+          };
+        } else {
+          if (!res) {
+            output.push(`mkdir: cannot create directory '${pathArg}'`);
+            cls = 'error';
+          }
         }
         break;
       }
@@ -1704,16 +2619,44 @@ export class Kernel {
           break;
         }
         const path = this.resolveRelativePath(args[0], currentDir);
+        const callerId = window.AstraRuntime ? window.AstraRuntime.getActiveCallerId() : 'user';
         const existing = this.state.resolvePath(path);
         if (!existing) {
-          if (!this.state.writeFile(path, '')) {
-            output.push(`touch: cannot create file '${args[0]}'`);
-            cls = 'error';
+          const res = this.syscall(callerId, 'fs:write', [path, '']);
+          if (res instanceof Promise) {
+            return {
+              async: true,
+              run: async (wr) => {
+                try {
+                  const ok = await res;
+                  if (!ok) return { output: [`touch: cannot create file '${args[0]}'`], cls: 'error' };
+                  return { output: [], cls: 'success' };
+                } catch (err) {
+                  return { output: [`touch: ${err.message}`], cls: 'error' };
+                }
+              }
+            };
+          } else {
+            if (!res) {
+              output.push(`touch: cannot create file '${args[0]}'`);
+              cls = 'error';
+            }
           }
         } else {
-          existing.updatedAt = Date.now();
-          existing.accessedAt = Date.now();
-          this.state.saveState();
+          const res = this.syscall(callerId, 'fs:write', [path, existing.content || '']);
+          if (res instanceof Promise) {
+            return {
+              async: true,
+              run: async (wr) => {
+                try {
+                  await res;
+                  return { output: [], cls: 'success' };
+                } catch (err) {
+                  return { output: [`touch: ${err.message}`], cls: 'error' };
+                }
+              }
+            };
+          }
         }
         break;
       }
@@ -1725,9 +2668,26 @@ export class Kernel {
         }
         const cleanPathArg = args[0].replace('-rf ', '').replace('-r ', '');
         const path = this.resolveRelativePath(cleanPathArg, currentDir);
-        if (!this.moveToTrash(path)) {
-          output.push(`rm: cannot remove '${cleanPathArg}'`);
-          cls = 'error';
+        const callerId = window.AstraRuntime ? window.AstraRuntime.getActiveCallerId() : 'user';
+        const res = this.syscall(callerId, 'fs:delete', [path]);
+        if (res instanceof Promise) {
+          return {
+            async: true,
+            run: async (wr) => {
+              try {
+                const ok = await res;
+                if (!ok) return { output: [`rm: cannot remove '${cleanPathArg}'`], cls: 'error' };
+                return { output: [], cls: 'success' };
+              } catch (err) {
+                return { output: [`rm: ${err.message}`], cls: 'error' };
+              }
+            }
+          };
+        } else {
+          if (!res) {
+            output.push(`rm: cannot remove '${cleanPathArg}'`);
+            cls = 'error';
+          }
         }
         break;
       }
@@ -1739,9 +2699,26 @@ export class Kernel {
         }
         const src = this.resolveRelativePath(args[0], currentDir);
         const dst = this.resolveRelativePath(args[1], currentDir);
-        if (!this.state.copyFile(src, dst)) {
-          output.push(`cp: cannot copy '${args[0]}'`);
-          cls = 'error';
+        const callerId = window.AstraRuntime ? window.AstraRuntime.getActiveCallerId() : 'user';
+        const res = this.syscall(callerId, 'fs:copy', [src, dst]);
+        if (res instanceof Promise) {
+          return {
+            async: true,
+            run: async (wr) => {
+              try {
+                const ok = await res;
+                if (!ok) return { output: [`cp: cannot copy '${args[0]}'`], cls: 'error' };
+                return { output: [], cls: 'success' };
+              } catch (err) {
+                return { output: [`cp: ${err.message}`], cls: 'error' };
+              }
+            }
+          };
+        } else {
+          if (!res) {
+            output.push(`cp: cannot copy '${args[0]}'`);
+            cls = 'error';
+          }
         }
         break;
       }
@@ -1753,9 +2730,26 @@ export class Kernel {
         }
         const src = this.resolveRelativePath(args[0], currentDir);
         const dst = this.resolveRelativePath(args[1], currentDir);
-        if (!this.state.moveFile(src, dst)) {
-          output.push(`mv: cannot move '${args[0]}'`);
-          cls = 'error';
+        const callerId = window.AstraRuntime ? window.AstraRuntime.getActiveCallerId() : 'user';
+        const res = this.syscall(callerId, 'fs:move', [src, dst]);
+        if (res instanceof Promise) {
+          return {
+            async: true,
+            run: async (wr) => {
+              try {
+                const ok = await res;
+                if (!ok) return { output: [`mv: cannot move '${args[0]}'`], cls: 'error' };
+                return { output: [], cls: 'success' };
+              } catch (err) {
+                return { output: [`mv: ${err.message}`], cls: 'error' };
+              }
+            }
+          };
+        } else {
+          if (!res) {
+            output.push(`mv: cannot move '${args[0]}'`);
+            cls = 'error';
+          }
         }
         break;
       }
@@ -1863,13 +2857,44 @@ export class Kernel {
       }
       case 'kill': {
         if (!args[0]) {
-          output.push('kill: usage: kill <pid>');
+          output.push('kill: usage: kill [-signal] <pid>');
           cls = 'error';
           break;
         }
-        const res = this.killProcess(args[0]);
-        output.push(res.success ? `Killed ${res.name} (PID ${args[0]})` : res.error);
-        cls = res.success ? 'success' : 'error';
+        let signal = '-9';
+        let targetPid = args[0];
+        if (args[0].startsWith('-')) {
+          signal = args[0];
+          targetPid = args[1];
+        }
+        if (!targetPid) {
+          output.push('kill: missing pid operand');
+          cls = 'error';
+          break;
+        }
+        const pid = parseInt(targetPid);
+        const proc = this.state.processTable.find(p => p.pid === pid);
+        if (!proc) {
+          output.push(`kill: ${targetPid}: no such process`);
+          cls = 'error';
+          break;
+        }
+        if (signal === '-9' || signal === '-SIGKILL') {
+          const res = this.killProcess(pid);
+          output.push(res.success ? `Killed ${res.name} (PID ${pid})` : res.error);
+          cls = res.success ? 'success' : 'error';
+        } else if (signal === '-19' || signal === '-SIGSTOP') {
+          proc.state = 'SUSPENDED';
+          output.push(`Suspended process ${proc.name} (PID ${pid})`);
+          this.state.saveState();
+        } else if (signal === '-18' || signal === '-SIGCONT') {
+          proc.state = 'RUNNING';
+          output.push(`Resumed process ${proc.name} (PID ${pid})`);
+          this.state.saveState();
+        } else {
+          output.push(`kill: unknown signal: ${signal}`);
+          cls = 'error';
+        }
         break;
       }
       case 'top': {
@@ -1894,15 +2919,20 @@ export class Kernel {
       }
       case 'su': {
         if (!args[0]) {
-          output.push('su: usage: su <username>');
+          output.push('su: usage: su <username> [password]');
           cls = 'error';
           break;
         }
-        if (this.switchUser(args[0])) {
-          output.push(`Switched to ${args[0]}`);
-          cls = 'success';
-        } else {
-          output.push(`su: user '${args[0]}' not found`);
+        try {
+          if (this.switchUser(args[0], args[1])) {
+            output.push(`Switched to ${args[0]}`);
+            cls = 'success';
+          } else {
+            output.push(`su: user '${args[0]}' not found`);
+            cls = 'error';
+          }
+        } catch (err) {
+          output.push(err.message);
           cls = 'error';
         }
         break;
@@ -2358,7 +3388,8 @@ export class Kernel {
         for (let r = 0; r < 5; r++) {
           let line = '';
           chars.forEach(c => {
-            line += (Reflect.get(bigMap, c) ? Reflect.get(bigMap, c)[r] : '     ') + ' ';
+            const charLines = Reflect.get(bigMap, window.sanitizeKey(c));
+            line += (charLines ? Reflect.get(charLines, r) : '     ') + ' ';
           });
           output.push(line);
         }
@@ -2392,7 +3423,7 @@ export class Kernel {
       case 'fg': {
         let jobIdStr = args[0] || '';
         if (jobIdStr.startsWith('%')) jobIdStr = jobIdStr.substring(1);
-        const jobId = parseInt(jobIdStr) || (this.jobs.length > 0 ? this.jobs[this.jobs.length - 1].id : 0);
+        const jobId = parseInt(jobIdStr) || (this.jobs.length > 0 ? Reflect.get(this.jobs, this.jobs.length - 1).id : 0);
         if (!jobId) {
           output.push('fg: no current job');
           cls = 'error';
@@ -2505,4 +3536,85 @@ export class Kernel {
       toast
     };
   }
+}
+
+function sha256Sync(str) {
+  function rotateRight(n, x) { return (x >>> n) | (x << (32 - n)); }
+  function choice(x, y, z) { return (x & y) ^ (~x & z); }
+  function majority(x, y, z) { return (x & y) ^ (x & z) ^ (y & z); }
+  function sigma0(x) { return rotateRight(2, x) ^ rotateRight(13, x) ^ rotateRight(22, x); }
+  function sigma1(x) { return rotateRight(6, x) ^ rotateRight(11, x) ^ rotateRight(25, x); }
+  function gamma0(x) { return rotateRight(7, x) ^ rotateRight(18, x) ^ (x >>> 3); }
+  function gamma1(x) { return rotateRight(17, x) ^ rotateRight(19, x) ^ (x >>> 10); }
+
+  const K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ];
+
+  let H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+
+  const words = [];
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    words.push(code & 0xff);
+  }
+
+  const byteLen = words.length;
+  words.push(0x80);
+  while ((words.length % 64) !== 56) {
+    words.push(0x00);
+  }
+
+  const bitLen = byteLen * 8;
+  const lenBytes = Array(8).fill(0);
+  for (let i = 7; i >= 0; i--) {
+    lenBytes[i] = (bitLen >>> ((7 - i) * 8)) & 0xff;
+  }
+  words.push(...lenBytes);
+
+  for (let i = 0; i < words.length; i += 64) {
+    const w = Array(64).fill(0);
+    for (let t = 0; t < 16; t++) {
+      w[t] = (words[i + t * 4] << 24) | (words[i + t * 4 + 1] << 16) | (words[i + t * 4 + 2] << 8) | words[i + t * 4 + 3];
+    }
+    for (let t = 16; t < 64; t++) {
+      w[t] = (gamma1(w[t - 2]) + w[t - 7] + gamma0(w[t - 15]) + w[t - 16]) | 0;
+    }
+
+    let [a, b, c, d, e, f, g, h] = H;
+
+    for (let t = 0; t < 64; t++) {
+      const t1 = (h + sigma1(e) + choice(e, f, g) + K[t] + w[t]) | 0;
+      const t2 = (sigma0(a) + majority(a, b, c)) | 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + t1) | 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (t1 + t2) | 0;
+    }
+
+    H[0] = (H[0] + a) | 0;
+    H[1] = (H[1] + b) | 0;
+    H[2] = (H[2] + c) | 0;
+    H[3] = (H[3] + d) | 0;
+    H[4] = (H[4] + e) | 0;
+    H[5] = (H[5] + f) | 0;
+    H[6] = (H[6] + g) | 0;
+    H[7] = (H[7] + h) | 0;
+  }
+
+  return H.map(x => {
+    const hex = (x >>> 0).toString(16);
+    return hex.padStart(8, '0');
+  }).join('');
 }

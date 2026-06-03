@@ -1,0 +1,126 @@
+<USER_REQUEST>
+the roadmap for the next 1-2 weeks is as follows:-
+
+make the core loop real:
+
+user intent → agent plan → approval → syscall/tool execution → verification → persisted memory → resumable workflow → visible audit trail
+
+That loop is the soul of the project.
+
+Target Outcome
+By the end of 1.5 to 2 weeks, Astra OS should be able to convincingly show:
+
+A stable browser-based OS shell.
+A reliable virtual filesystem.
+A permissioned syscall layer.
+A visible process/task/workflow model.
+One or two real agent workflows that safely modify the OS state.
+Persistence across reload.
+A demo-ready UI showing what the agent is doing and why.
+Phase 1: Foundation Repair
+Days 1-3
+
+Goal: make the OS stable enough that future features sit on solid ground.
+
+Work items:
+
+Fix IndexedDB restore and state migration.
+Decide a single source of truth between IndexedDB and localStorage.
+Add schema migration helpers.
+Make reset/recovery reliable.
+Audit all direct state mutations from apps.
+Force risky operations through Astra.syscall.
+Normalize syscall response shape everywhere.
+Add basic error handling for storage failures.
+Make boot sequence reflect real subsystem initialization.
+Deliverables:
+
+Reload-safe VFS, workflows, tasks, users, env vars.
+Stable boot without console errors.
+Clear storage reset behavior.
+Basic persistence tests.
+Success criteria:
+
+Create file, reload, file remains.
+Start workflow, reload, workflow resumes or remains inspectable.
+Change settings, reload, settings remain.
+No undefined variable errors during boot.
+Phase 2: Security And Kernel Boundaries
+Days 3-5
+
+Goal: make the OS model believable and safer.
+
+Work items:
+
+Separate caller identities:
+system
+user_session
+app
+agent
+worker
+Remove broad fallback permissions for unknown callers.
+Define app manifests for all built-in apps.
+Define agent capability manifests.
+Add sandbox rules:
+user apps can read/write user home,
+agents can read workspace/project areas,
+system paths require approval/admin.
+Make destructive actions require approval:
+delete,
+<truncated 4759 bytes>
+ compatibility.
+Local workspace bridge to actual project files.
+More built-in apps.
+Visual polish pass.
+What The Final Demo Should Show
+A strong final demo could go like this:
+
+Boot Astra OS.
+Login.
+Open Dashboard and show system state.
+Ask agent: Create a system report.
+Agent drafts plan.
+Approval appears for file write.
+User approves.
+Agent writes report.
+Agent verifies report.
+Editor opens the generated file.
+Workflow app shows full trace.
+Reload browser.
+Report and workflow history are still there.
+Ask agent: Audit this project and make a next-actions plan.
+Agent creates project plan and tasks.
+That demo tells the story clearly: this is not just a UI. It is a small operating environment where agents act through controlled system primitives.
+
+Biggest Remaining Risks
+
+Persistence remains flaky.
+Agent logic stays hardcoded.
+Permissions look real but are bypassable.
+Tests are too broad and brittle.
+UI claims more than the system can do.
+Too many features get added before the core loop is stable.
+My Recommendation
+For 1.5 to 2 weeks, aim for a deep MVP, not a wide prototype.
+
+The winning version is:
+
+Astra OS can run safe, inspectable, resumable agent workflows over a virtual OS environment.
+
+That is a much stronger delivery than having twenty apps and an agent that only pretends to reason.
+
+discuss this with me first then lets start working once brainstormed and planned and jotted everything down.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-06-01T14:04:27+05:30.
+
+The user's current state is as follows:
+Active Document: /Users/divyanshusinha/OS building/css/style.css (LANGUAGE_CSS)
+Cursor is on line: 1
+Other open documents:
+- /Users/divyanshusinha/OS building/js/agents.js (LANGUAGE_JAVASCRIPT)
+- /Users/divyanshusinha/OS building/.git/COMMIT_EDITMSG (LANGUAGE_UNSPECIFIED)
+- /Users/divyanshusinha/OS building/js/kernel.js (LANGUAGE_JAVASCRIPT)
+- /Users/divyanshusinha/OS building/LICENSE (LANGUAGE_PLAINTEXT)
+- /Users/divyanshusinha/OS building/index.html (LANGUAGE_HTML)
+</ADDITIONAL_METADATA>

@@ -4344,3 +4344,456 @@ dialog::backdrop {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-8px); }
 }
+
+/* ==========================================
+   Safe Mode Banner
+   ========================================== */
+
+.safe-mode-banner {
+  position: fixed;
+  top: var(--menu-height);
+  left: 0;
+  width: 100%;
+  height: 36px;
+  background: linear-gradient(
+    90deg,
+    hsla(35, 90%, 55%, 0.15) 0%,
+    hsla(0, 80%, 55%, 0.12) 50%,
+    hsla(35, 90%, 55%, 0.15) 100%
+  );
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid hsla(35, 90%, 55%, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  z-index: 999;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-amber);
+  letter-spacing: 0.5px;
+  animation: safe-mode-shimmer 3s ease infinite;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.safe-mode-banner.hidden {
+  opacity: 0;
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+
+.safe-mode-banner .shield-icon {
+  display: flex;
+  align-items: center;
+  animation: pulse-animation 2s infinite;
+}
+
+.safe-mode-banner .banner-text {
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+.safe-mode-banner .exit-btn {
+  background: hsla(35, 90%, 55%, 0.2);
+  border: 1px solid hsla(35, 90%, 55%, 0.4);
+  color: var(--color-amber);
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.2s;
+  letter-spacing: 0.5px;
+}
+
+.safe-mode-banner .exit-btn:hover {
+  background: hsla(35, 90%, 55%, 0.35);
+  transform: scale(1.05);
+}
+
+@keyframes safe-mode-shimmer {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* Shift desktop content down when safe mode is active */
+body.safe-mode-active .desktop {
+  top: calc(var(--safe-top) + 36px);
+  height: calc(100vh - var(--safe-top) - 36px);
+}
+
+body.safe-mode-active .window {
+  /* Ensure windows don't overlap the banner */
+}
+
+/* ==========================================
+   Observability Monitor Panel
+   ========================================== */
+
+.observability-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.obs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.obs-header h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.obs-header .live-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--color-green);
+  border-radius: 50%;
+  animation: pulse-animation 1.5s infinite;
+  box-shadow: 0 0 6px var(--color-green);
+}
+
+.obs-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.obs-metric-card {
+  background: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.2s;
+}
+
+.obs-metric-card:hover {
+  border-color: var(--border-glass-focus);
+}
+
+.obs-metric-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+}
+
+.obs-metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.obs-metric-unit {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.obs-metric-card.warn .obs-metric-value {
+  color: var(--color-amber);
+}
+
+.obs-metric-card.danger .obs-metric-value {
+  color: var(--color-red);
+}
+
+/* Syscall Latency Histogram */
+.obs-latency-section {
+  background: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.obs-latency-section h4 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.obs-latency-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 60px;
+}
+
+.obs-latency-bar {
+  flex: 1;
+  background: linear-gradient(180deg, var(--color-primary) 0%, hsla(var(--hue-primary), 60%, 30%, 0.4) 100%);
+  border-radius: 3px 3px 0 0;
+  min-height: 3px;
+  transition: height 0.3s ease;
+  position: relative;
+}
+
+.obs-latency-bar:hover::after {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--text-primary);
+  background: var(--bg-glass-active);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 5;
+}
+
+/* Event Log Table */
+.obs-log-section {
+  background: var(--bg-glass-light);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  padding: 14px;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.obs-log-section h4 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.obs-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.obs-log-table th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-glass);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.obs-log-table td {
+  padding: 5px 8px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.obs-log-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.obs-log-level {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.obs-log-level.INFO { background: hsla(220, 70%, 50%, 0.2); color: hsl(220, 80%, 65%); }
+.obs-log-level.WARN { background: hsla(35, 90%, 55%, 0.2); color: var(--color-amber); }
+.obs-log-level.ERROR { background: hsla(0, 80%, 55%, 0.2); color: var(--color-red); }
+
+/* Tab Completion Dropdown */
+.tab-completion-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--bg-glass-active);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px 8px 0 0;
+  z-index: 50;
+  display: none;
+}
+
+.tab-completion-dropdown.visible {
+  display: block;
+}
+
+.tab-completion-item {
+  padding: 5px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.1s;
+}
+
+.tab-completion-item:hover,
+.tab-completion-item.active {
+  background: hsla(var(--hue-primary), 50%, 50%, 0.15);
+  color: var(--text-primary);
+}
+
+.tab-completion-item .tc-type {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+}
+
+.tab-completion-item .tc-type.cmd { background: hsla(220, 70%, 50%, 0.2); color: hsl(220, 80%, 65%); }
+.tab-completion-item .tc-type.file { background: hsla(var(--hue-secondary), 60%, 40%, 0.2); color: var(--color-green); }
+.tab-completion-item .tc-type.dir { background: hsla(35, 90%, 55%, 0.2); color: var(--color-amber); }
+.tab-completion-item .tc-type.alias { background: hsla(280, 60%, 50%, 0.2); color: hsl(280, 70%, 65%); }
+
+/* ==========================================
+   Astra OS Shortcomings Remediation Styling
+   ========================================== */
+
+/* 1. Window Snap Preview Outline */
+.snap-preview {
+  position: absolute;
+  background: hsla(var(--hue-primary), 60%, 50%, 0.15);
+  border: 2px solid hsl(var(--hue-primary), 70%, 65%);
+  border-radius: 8px;
+  box-shadow: 0 0 20px hsla(var(--hue-primary), 60%, 50%, 0.3);
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.snap-preview.visible {
+  opacity: 1;
+}
+
+/* 2. Dock Tooltips on Hover */
+.dock-item {
+  position: relative;
+}
+.dock-item::after {
+  content: attr(title);
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%) scale(0.9);
+  padding: 5px 10px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-sans), sans-serif;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 10000;
+}
+.dock-item:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+/* 3. Window Minimize-to-Dock Animation */
+@keyframes minimize-to-dock {
+  0% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.1) translateY(300px);
+  }
+}
+@keyframes restore-from-dock {
+  0% {
+    opacity: 0;
+    transform: scale(0.1) translateY(300px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.window.minimizing {
+  animation: minimize-to-dock 0.25s forwards cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+.window.restoring {
+  animation: restore-from-dock 0.25s forwards cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+/* 4. Glassmorphism Custom Context Menu */
+.context-menu {
+  position: absolute;
+  z-index: 100000;
+  min-width: 150px;
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  padding: 5px 0;
+  margin: 0;
+  list-style: none;
+  transition: opacity 0.15s ease;
+}
+.context-menu-item {
+  padding: 8px 16px;
+  color: var(--text-secondary);
+  font-family: var(--font-sans), sans-serif;
+  font-size: 12.5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.12s, color 0.12s;
+}
+.context-menu-item:hover {
+  background: hsla(var(--hue-primary), 50%, 50%, 0.15);
+  color: var(--text-primary);
+}
+.context-menu-separator {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 0;
+}
+
+/* Override existing plain snap-zones with high-fidelity glow */
+.snap-zone {
+  background: hsla(var(--hue-primary), 60%, 50%, 0.12) !important;
+  border: 2px solid hsl(var(--hue-primary), 70%, 65%) !important;
+  box-shadow: 0 0 25px hsla(var(--hue-primary), 60%, 50%, 0.25) !important;
+  backdrop-filter: blur(10px) !important;
+}

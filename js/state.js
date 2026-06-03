@@ -2,8 +2,69 @@
 // Astra OS State Management Module (Expanded)
 // ==========================================
 
+const MODIFYING_METHODS = new Set([
+  'saveState', '_executeSaveState', 'logEvent', 'addApprovalRequest', 'resolveApprovalRequest',
+  'createWorkflow', 'updateWorkflow', 'appendWorkflowStep', 'recordApproval', 'runIntegrityChecks',
+  'lockPath', 'unlockPath', 'releaseLocksForOwner', 'cleanupStaleLocks',
+  'writeFile', 'createDir', 'deleteFile', 'renameFile', 'copyFile', 'moveFile',
+  'addMemoryNode', 'addMemoryLink', 'clearMemoryGraph', 'addAuditLog', 'updateTaskStatus',
+  'addTask', 'deleteTask', 'addNotification', 'markAllNotificationsRead', 'resetAllState'
+]);
+
+function createDeepReadOnlyProxy(target, stateInstance) {
+  if (target === null || typeof target !== 'object') {
+    return target;
+  }
+  if (target.__isProxy) return target;
+  if (target instanceof Promise || target instanceof IDBDatabase || target instanceof IDBTransaction || target instanceof IDBRequest) {
+    return target;
+  }
+  return new Proxy(target, {
+    get(t, prop, receiver) {
+      if (prop === '__isProxy') return true;
+      if (prop === '__target') return t;
+      const value = Reflect.get(t, prop);
+      if (typeof prop === 'string' && prop.startsWith('_')) {
+        return value;
+      }
+      if (typeof value === 'function') {
+        return function(...args) {
+          if (prop === 'withKernelWrite') {
+            return Reflect.apply(value, t, args);
+          }
+          if (MODIFYING_METHODS.has(prop) && !stateInstance._isKernelModifying) {
+            throw new Error(`Direct call of mutating method ${String(prop)} is forbidden outside kernel mediation`);
+          }
+          const result = Reflect.apply(value, t, args);
+          return createDeepReadOnlyProxy(result, stateInstance);
+        };
+      }
+      return createDeepReadOnlyProxy(value, stateInstance);
+    },
+    set(t, prop, value, receiver) {
+      if (typeof prop === 'string' && prop.startsWith('_')) {
+        return Reflect.set(t, prop, value);
+      }
+      if (!stateInstance._isKernelModifying) {
+        throw new Error(`Direct mutation of state is forbidden outside kernel mediation (prop: ${String(prop)})`);
+      }
+      return Reflect.set(t, prop, value);
+    },
+    deleteProperty(t, prop) {
+      if (typeof prop === 'string' && prop.startsWith('_')) {
+        return Reflect.deleteProperty(t, prop);
+      }
+      if (!stateInstance._isKernelModifying) {
+        throw new Error(`Direct mutation of state is forbidden outside kernel mediation (prop: ${String(prop)})`);
+      }
+      return Reflect.deleteProperty(t, prop);
+    }
+  });
+}
+
 export class OSState {
   constructor() {
+    this._isKernelModifying = true;
     this.schemaVersion = 2;
     this.fs = {};
     this.memoryGraph = { nodes: [], links: [] };
@@ -14,19 +75,91 @@ export class OSState {
 
     // --- New kernel-level state ---
     this.processTable = [];
-    this.users = [];
-    this.currentSession = {};
+    this.users = [
+      { uid: 0, username: 'root', displayName: 'System Administrator', password: 'root', role: 'admin', homeDir: '/root', shell: '/bin/sh' },
+      { uid: 1000, username: 'divyanshu', displayName: 'Divyanshu', password: '1234', role: 'admin', homeDir: '/home/divyanshu', shell: '/bin/sh' },
+      { uid: 1001, username: 'guest', displayName: 'Guest', password: '', role: 'guest', homeDir: '/home/guest', shell: '/bin/sh' }
+    ];
+    this.currentSession = {
+      currentUser: 'divyanshu',
+      uid: 1000,
+      role: 'admin',
+      isLocked: false,
+      lastLoginTime: Date.now()
+    };
     this.packages = [];
     this.network = {};
     this.gitRepos = {};
     this.hardware = {};
-    this.registry = {};
+    this.registry = {
+      appearance: {
+        accentColor: 'purple',
+        wallpaper: 'default',
+        fontSize: 13,
+        dockPosition: 'bottom',
+        dockSize: 'medium'
+      },
+      security: {
+        autoLockTimeout: 300,
+        requirePasswordOnWake: true,
+        enforcePermissions: true,
+        safeMode: false
+      },
+      appManifests: {
+        'explorer': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+        'editor': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+        'terminal': { permissions: ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'], sandbox: ['/'] },
+        'settings': { permissions: ['settings:read', 'settings:write', 'fs:read', 'fs:write'], sandbox: ['/'] },
+        'dashboard': { permissions: ['fs:read'], sandbox: ['/'] },
+        'workflow': { permissions: ['fs:read'], sandbox: ['/'] },
+        'memory': { permissions: ['fs:read'], sandbox: ['/'] },
+        'sysmonitor': { permissions: ['proc:spawn', 'proc:kill'], sandbox: ['/'] },
+        'AstraAgent': { permissions: ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
+        'ExecutorAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'WatcherAgent': { permissions: ['fs:read', 'proc:spawn'], sandbox: ['/home/divyanshu', '/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'PlannerAgent': { permissions: ['fs:read'], sandbox: ['/home/divyanshu', '/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'MemoryAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/Project_Astra', '/Satellite_Defense', '/tmp'] }
+      },
+      safety: {
+        writePolicy: 'ask',
+        commandPolicy: 'ask',
+        networkPolicy: 'approve',
+        settingsPolicy: 'ask',
+        confidenceThreshold: 85
+      },
+      system: {
+        hostname: 'astra-desktop',
+        startupApps: ['editor', 'tasks'],
+        defaultShell: '/bin/sh',
+        timeFormat: '12h',
+        soundEnabled: true,
+        focusMode: 'coding',
+        capsules: []
+      },
+      keybindings: {
+        commandPalette: 'Cmd+K',
+        lockScreen: 'Cmd+L',
+        toggleSidebar: 'Cmd+\\',
+        snapLeft: 'Cmd+Left',
+        snapRight: 'Cmd+Right',
+        maximize: 'Cmd+Up'
+      },
+      ai: {
+        provider: 'gemini',
+        apiKey: '',
+        model: 'gemini-1.5-flash',
+        systemPrompt: 'You are Astra OS Copilot, an advanced agentic AI built into Astra OS. You help the user manage files, run terminal commands, and organize tasks.',
+        temperature: 0.7,
+        voiceEnabled: true
+      }
+    };
     this.notifications = [];
     this.trash = [];
     this.locks = [];
     this.workflows = [];
     this.eventLog = [];
     this.approvalsQueue = [];
+    this.failureMemory = [];
     this.env = { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
 
     this.systemVars = {
@@ -43,8 +176,55 @@ export class OSState {
       currentWorkspace: 0
     };
 
-    this.initializeState();
     this.dbLoaded = this.initIndexedDB();
+    
+    // Periodic background maintenance
+    setInterval(() => this.withKernelWrite(() => this.cleanupStaleLocks()), 10000);
+    setInterval(() => {
+      this.withKernelWrite(() => {
+        const now = Date.now();
+        const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+        const beforeCount = this.trash.length;
+        this.trash = this.trash.filter(item => (now - item.deletedAt) < SEVEN_DAYS_MS);
+        if (this.trash.length !== beforeCount) {
+          this.saveState();
+          this.logEvent('fs.trash_sweep', 'System', { swept: beforeCount - this.trash.length });
+        }
+      });
+    }, 60000);
+
+    this._isKernelModifying = false;
+    return createDeepReadOnlyProxy(this, this);
+  }
+
+  withKernelWrite(callback) {
+    const wasModifying = this._isKernelModifying;
+    this._isKernelModifying = true;
+    let isPromise = false;
+    try {
+      const result = callback();
+      if (result && typeof result.then === 'function') {
+        isPromise = true;
+        return Promise.resolve(result).then(
+          (val) => {
+            this._isKernelModifying = wasModifying;
+            return val;
+          },
+          (err) => {
+            this._isKernelModifying = wasModifying;
+            throw err;
+          }
+        );
+      }
+      return result;
+    } catch (err) {
+      this._isKernelModifying = wasModifying;
+      throw err;
+    } finally {
+      if (!isPromise) {
+        this._isKernelModifying = wasModifying;
+      }
+    }
   }
 
   initIndexedDB() {
@@ -62,154 +242,102 @@ export class OSState {
         const store = transaction.objectStore('state');
         const getRequest = store.get('current_state');
         getRequest.onsuccess = () => {
-          if (getRequest.result) {
-            const parsed = getRequest.result;
-            if (parsed.fs) this.fs = parsed.fs;
-            if (parsed.memoryGraph) this.memoryGraph = parsed.memoryGraph;
-            if (parsed.agentTasks) this.agentTasks = parsed.agentTasks;
-            if (parsed.registry) this.registry = parsed.registry;
-            if (parsed.processTable) this.processTable = parsed.processTable;
-            if (parsed.env) this.env = parsed.env;
-            if (parsed.workflows) this.workflows = parsed.workflows;
-            if (parsed.eventLog) this.eventLog = parsed.eventLog;
-            console.log('[IndexedDB] Successfully loaded state.');
-            if (window.refreshExplorerGrid) window.refreshExplorerGrid();
-            if (window.refreshTasksBoard) window.refreshTasksBoard();
-            if (window.drawMemoryGraphApp) window.drawMemoryGraphApp();
-            if (window.refreshSidebarMemories) window.refreshSidebarMemories();
-          }
+          this.withKernelWrite(() => {
+            if (getRequest.result) {
+              const parsed = getRequest.result;
+              if (parsed.fs) this.fs = parsed.fs;
+              if (parsed.memoryGraph) this.memoryGraph = parsed.memoryGraph;
+              if (parsed.processes) this.processes = parsed.processes;
+              if (parsed.agentTasks) this.agentTasks = parsed.agentTasks;
+              if (parsed.auditLogs) this.auditLogs = parsed.auditLogs;
+              if (parsed.activeWindow) this.activeWindow = parsed.activeWindow;
+              if (parsed.systemVars) this.systemVars = { ...this.systemVars, ...parsed.systemVars };
+              if (parsed.registry) this.registry = parsed.registry;
+              if (parsed.processTable) this.processTable = parsed.processTable;
+              if (parsed.users) this.users = parsed.users;
+              if (parsed.currentSession) this.currentSession = parsed.currentSession;
+              if (parsed.packages) this.packages = parsed.packages;
+              if (parsed.network) this.network = parsed.network;
+              if (parsed.gitRepos) this.gitRepos = parsed.gitRepos;
+              if (parsed.hardware) this.hardware = parsed.hardware;
+              if (parsed.notifications) this.notifications = parsed.notifications;
+              if (parsed.trash) this.trash = parsed.trash;
+              if (parsed.locks) this.locks = parsed.locks;
+              if (parsed.workflows) this.workflows = parsed.workflows;
+              if (parsed.eventLog) this.eventLog = parsed.eventLog;
+              if (parsed.failureMemory) this.failureMemory = parsed.failureMemory;
+              if (parsed.approvalsQueue) this.approvalsQueue = parsed.approvalsQueue;
+              if (parsed.approvedActions) this.approvedActions = parsed.approvedActions;
+              if (parsed.env) this.env = parsed.env;
+              console.log('[IndexedDB] Successfully loaded state.');
+            } else {
+              this.seedDefaults();
+              console.log('[IndexedDB] Seeded default state.');
+            }
+
+            // Post-load validation and hot-fixes (migration helper checks)
+            if (!this.users || this.users.length === 0) {
+              this.seedUsers();
+            }
+            let divy = this.users.find(u => u.username === 'divyanshu');
+            if (!divy) {
+              divy = { uid: 1000, username: 'divyanshu', displayName: 'Divyanshu', password: 'e22e968051759600a206c280e22ea409c1626400c6225b68', role: 'admin', homeDir: '/home/divyanshu', shell: '/bin/sh' };
+              this.users.push(divy);
+            }
+            // Enforce session
+            this.currentSession.isLocked = false;
+            if (!this.currentSession.currentUser || this.currentSession.currentUser === 'guest' || this.currentSession.currentUser === 'root') {
+              this.currentSession.currentUser = 'divyanshu';
+              this.currentSession.uid = 1000;
+              this.currentSession.role = 'admin';
+            }
+            if (!this.processes.dailybriefing) {
+              this.processes.dailybriefing = { open: false, minimized: false, x: 220, y: 120, w: 680, h: 480, zIndex: 23 };
+            }
+            if (!this.processes.trust) {
+              this.processes.trust = { open: false, minimized: false, x: 140, y: 90, w: 720, h: 500, zIndex: 24 };
+            }
+            if (!this.processes.timeline) {
+              this.processes.timeline = { open: false, minimized: false, x: 260, y: 130, w: 700, h: 480, zIndex: 25 };
+            }
+            if (!this.registry.ai) {
+              this.registry.ai = {
+                provider: 'gemini',
+                apiKey: '',
+                model: 'gemini-1.5-flash',
+                systemPrompt: 'You are Astra OS Copilot, an advanced agentic AI built into Astra OS. You help the user manage files, run terminal commands, and organize tasks.',
+                temperature: 0.7,
+                voiceEnabled: true
+              };
+            }
+            if (!this.registry.safety) {
+              this.registry.safety = {
+                writePolicy: 'ask',
+                commandPolicy: 'ask',
+                networkPolicy: 'approve',
+                settingsPolicy: 'ask',
+                confidenceThreshold: 85
+              };
+            }
+            this.saveState();
+          });
+
+          if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+          if (window.refreshTasksBoard) window.refreshTasksBoard();
+          if (window.drawMemoryGraphApp) window.drawMemoryGraphApp();
+          if (window.refreshSidebarMemories) window.refreshSidebarMemories();
           resolve(true);
         };
-        getRequest.onerror = () => resolve(false);
+        getRequest.onerror = () => {
+          this.withKernelWrite(() => this.seedDefaults());
+          resolve(false);
+        };
       };
-      request.onerror = () => resolve(false);
+      request.onerror = () => {
+        this.withKernelWrite(() => this.seedDefaults());
+        resolve(false);
+      };
     });
-  }
-
-  initializeState() {
-    if (localStorage.getItem('astra_os_state')) {
-      try {
-        const parsed = JSON.parse(localStorage.getItem('astra_os_state'));
-        this.fs = parsed.fs || {};
-        this.memoryGraph = parsed.memoryGraph || { nodes: [], links: [] };
-        this.processes = parsed.processes || {};
-        this.agentTasks = parsed.agentTasks || [];
-        this.auditLogs = parsed.auditLogs || [];
-        this.activeWindow = parsed.activeWindow || null;
-        this.systemVars = parsed.systemVars || this.systemVars;
-        this.processTable = parsed.processTable || [];
-        this.users = Array.isArray(parsed.users) ? parsed.users : [];
-        this.currentSession = parsed.currentSession || {};
-        this.packages = parsed.packages || [];
-        this.network = parsed.network || {};
-        this.gitRepos = parsed.gitRepos || {};
-        this.hardware = parsed.hardware || {};
-        this.registry = parsed.registry || {};
-        this.workflows = parsed.workflows || [];
-        this.eventLog = parsed.eventLog || [];
-        if (!this.registry.ai) {
-          this.registry.ai = {
-            provider: 'gemini',
-            apiKey: '',
-            model: 'gemini-1.5-flash',
-            systemPrompt: 'You are Astra OS Copilot, an advanced agentic AI built into Astra OS. You help the user manage files, run terminal commands, and organize tasks.',
-            temperature: 0.7,
-            voiceEnabled: true
-          };
-        } else if (this.registry.ai.voiceEnabled === undefined) {
-          this.registry.ai.voiceEnabled = true;
-        }
-        this.notifications = parsed.notifications || [];
-        this.trash = parsed.trash || [];
-        this.locks = parsed.locks || [];
-        this.env = parsed.env || { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
-        // Ensure users structure exists and is populated
-        if (this.users.length === 0) {
-          this.seedUsers();
-        }
-
-        // Migrate divyanshu password from 'astra' or empty/undefined to '1234' while preserving custom passwords
-        let divy = this.users.find(u => u.username === 'divyanshu');
-        if (!divy) {
-          divy = { uid: 1000, username: 'divyanshu', displayName: 'Divyanshu', password: '1234', role: 'admin', homeDir: '/home/divyanshu', shell: '/bin/sh' };
-          this.users.push(divy);
-          this.saveState();
-        } else if (divy.password === 'astra' || !divy.password) {
-          divy.password = '1234';
-          this.saveState();
-        }
-
-        // Enforce active session to default to divyanshu and unlocked, preventing lockout
-        this.currentSession.isLocked = false;
-        if (!this.currentSession.currentUser || this.currentSession.currentUser === 'guest' || this.currentSession.currentUser === 'root') {
-          this.currentSession.currentUser = 'divyanshu';
-          this.currentSession.uid = 1000;
-          this.currentSession.role = 'admin';
-          this.saveState();
-        }
-
-        if (!this.processes.dailybriefing) {
-          this.processes.dailybriefing = { open: false, minimized: false, x: 220, y: 120, w: 680, h: 480, zIndex: 23 };
-          this.saveState();
-        }
-        if (!this.processes.trust) {
-          this.processes.trust = { open: false, minimized: false, x: 140, y: 90, w: 720, h: 500, zIndex: 24 };
-          this.saveState();
-        }
-        if (!this.processes.timeline) {
-          this.processes.timeline = { open: false, minimized: false, x: 260, y: 130, w: 700, h: 480, zIndex: 25 };
-          this.saveState();
-        }
-        if (!this.registry.safety) {
-          this.registry.safety = {
-            writePolicy: 'ask',
-            commandPolicy: 'ask',
-            networkPolicy: 'approve',
-            settingsPolicy: 'ask',
-            confidenceThreshold: 85
-          };
-          this.saveState();
-        }
-        if (!this.registry.system.capsules) {
-          this.registry.system.capsules = [
-            {
-              id: 'capsule-satellite',
-              name: 'AI Satellite Defense Project',
-              focusMode: 'deepwork',
-              activeFile: '/Satellite_Defense/control.js',
-              openApps: ['editor', 'terminal', 'trust'],
-              description: 'Satellite telemetry feeds, collision avoidance algorithms, active warning grid.'
-            },
-            {
-              id: 'capsule-astra',
-              name: 'Project Astra Core Gateway',
-              focusMode: 'coding',
-              activeFile: '/Project_Astra/index.js',
-              openApps: ['editor', 'tasks', 'dashboard'],
-              description: 'Gateway route initializer for Express, websocket interfaces.'
-            },
-            {
-              id: 'capsule-research',
-              name: 'Research Mode: Agent Architectures',
-              focusMode: 'research',
-              activeFile: '/Project_Astra/README.md',
-              openApps: ['browser', 'memory', 'timeline'],
-              description: 'Comparing multi-agent routing engines and vector memory strategies.'
-            }
-          ];
-          this.saveState();
-        }
-
-        if (Object.keys(this.fs).length > 0) {
-          return;
-        }
-      } catch (err) {
-        console.error('Failed to load OS State. Re-seeding.', err);
-        this.seedDefaults();
-        return;
-      }
-    }
-    this.seedDefaults();
   }
 
   seedDefaults() {
@@ -227,6 +355,8 @@ export class OSState {
     this.gitRepos = {};
     this.notifications = [];
     this.trash = [];
+    this.approvalsQueue = [];
+    this.approvedActions = {};
     this.env = { PATH: '/bin:/usr/bin', USER: 'divyanshu', HOME: '/home/divyanshu', SHELL: '/bin/sh' };
     this.workflows = [];
     this.eventLog = [];
@@ -444,10 +574,10 @@ export class OSState {
         'memory': { permissions: ['fs:read'], sandbox: ['/'] },
         'sysmonitor': { permissions: ['proc:spawn', 'proc:kill'], sandbox: ['/'] },
         'AstraAgent': { permissions: ['fs:read', 'fs:write', 'proc:spawn', 'proc:kill'], sandbox: ['/home/divyanshu', '/tmp', '/Project_Astra', '/Satellite_Defense'] },
-        'ExecutorAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
-        'WatcherAgent': { permissions: ['fs:read', 'proc:spawn'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
-        'PlannerAgent': { permissions: ['fs:read'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] },
-        'MemoryAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/Project_Astra', '/Satellite_Defense', '/tmp'] }
+        'ExecutorAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'WatcherAgent': { permissions: ['fs:read', 'proc:spawn'], sandbox: ['/home/divyanshu', '/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'PlannerAgent': { permissions: ['fs:read'], sandbox: ['/home/divyanshu', '/Project_Astra', '/Satellite_Defense', '/tmp'] },
+        'MemoryAgent': { permissions: ['fs:read', 'fs:write'], sandbox: ['/home/divyanshu', '/Project_Astra', '/Satellite_Defense', '/tmp'] }
       },
       safety: {
         writePolicy: 'ask',
@@ -592,7 +722,7 @@ export class OSState {
     }
     this._saveTimeout = setTimeout(() => {
       this._executeSaveState();
-    }, 100);
+    }, 300);
   }
 
   _executeSaveState() {
@@ -618,6 +748,9 @@ export class OSState {
       locks: this.locks,
       workflows: this.workflows,
       eventLog: this.eventLog.slice(-500),
+      failureMemory: this.failureMemory,
+      approvalsQueue: this.approvalsQueue,
+      approvedActions: this.approvedActions,
       env: this.env
     };
 
@@ -625,20 +758,12 @@ export class OSState {
       try {
         const transaction = this.db.transaction(['state'], 'readwrite');
         const store = transaction.objectStore('state');
-        store.put(raw, 'current_state');
+        store.put(JSON.parse(JSON.stringify(raw)), 'current_state');
       } catch (err) {
         console.error('[IndexedDB] Save state error', err);
       }
     }
 
-    try {
-      localStorage.setItem('astra_os_state', JSON.stringify(raw));
-    } catch (e) {
-      console.warn('localStorage quota exceeded, saving minimally to localStorage and relying on IndexedDB');
-      try {
-        localStorage.setItem('astra_os_state', JSON.stringify({ ...raw, fs: {}, auditLogs: [] }));
-      } catch (e2) { /* give up */ }
-    }
   }
 
   logEvent(type, source, detail = {}, level = 'INFO') {
@@ -651,10 +776,10 @@ export class OSState {
       level,
       timestamp: Date.now()
     });
-    if (this.eventLog.length > 1000) this.eventLog.shift();
+    if (this.eventLog.length > 500) this.eventLog.shift();
   }
 
-  addApprovalRequest(callerId, callName, args, details = '') {
+  addApprovalRequest(callerId, callName, args, details = '', metadata = {}) {
     const id = `appr-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
     const request = {
       id,
@@ -662,6 +787,7 @@ export class OSState {
       callName,
       args,
       details,
+      metadata,
       status: 'pending',
       timestamp: Date.now()
     };
@@ -821,9 +947,11 @@ export class OSState {
   canModifyNode(node, user = null) {
     if (!node) return false;
     if (!this.registry?.security?.enforcePermissions) return true;
-    const current = user || this.currentSession.currentUser || 'divyanshu';
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    const userObj = this.users.find(u => u.username === currentUser);
+    const isAdmin = (userObj && userObj.role === 'admin') || currentUser === 'root';
     const owner = node.owner || 'divyanshu';
-    if (current === owner || this.currentSession.role === 'admin') return true;
+    if (currentUser === owner || isAdmin) return true;
     const perms = node.permissions || (node.type === 'dir' ? 'rwxr-xr-x' : 'rw-r--r--');
     return perms[1] === 'w' || perms[4] === 'w' || perms[7] === 'w';
   }
@@ -831,9 +959,11 @@ export class OSState {
   canReadNode(node, user = null) {
     if (!node) return false;
     if (!this.registry?.security?.enforcePermissions) return true;
-    const current = user || this.currentSession.currentUser || 'divyanshu';
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    const userObj = this.users.find(u => u.username === currentUser);
+    const isAdmin = (userObj && userObj.role === 'admin') || currentUser === 'root';
     const owner = node.owner || 'divyanshu';
-    if (current === owner || this.currentSession.role === 'admin') return true;
+    if (currentUser === owner || isAdmin) return true;
     const perms = node.permissions || (node.type === 'dir' ? 'rwxr-xr-x' : 'rw-r--r--');
     return perms[0] === 'r' || perms[3] === 'r' || perms[6] === 'r';
   }
@@ -859,16 +989,55 @@ export class OSState {
     return false;
   }
 
+  isPathMounted(pathStr) {
+    if (!pathStr) return true;
+    const cleanPath = pathStr.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+    if (cleanPath === '/') return true;
+    
+    const partitions = this.hardware?.storage?.partitions || [];
+    for (const part of partitions) {
+      if (part.mountpoint === '/') continue;
+      const cleanMount = part.mountpoint.replace(/\/+/g, '/').replace(/\/$/, '');
+      if (cleanPath === cleanMount || cleanPath.startsWith(cleanMount + '/')) {
+        if (!part.mounted) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   // ==========================================
   // Virtual Filesystem Accessors
   // ==========================================
   resolvePath(pathStr, user = null) {
-    if (!pathStr || pathStr === '/' || pathStr === 'root') return this.fs['root'];
-    const parts = pathStr.replace(/^\//, '').split('/').filter(Boolean);
+    if (!pathStr) return null;
+    if (pathStr === '/' || pathStr === 'root') return this.fs['root'];
+    
+    // Normalize path (resolve . and ..)
+    const rawParts = pathStr.split('/').filter(Boolean);
+    const stack = [];
+    for (const part of rawParts) {
+      if (part === '.') continue;
+      if (part === '..') {
+        stack.pop();
+      } else {
+        stack.push(part);
+      }
+    }
+    const normalizedPath = '/' + stack.join('/');
+    if (normalizedPath === '/') return this.fs['root'];
+    
+    // Check if the path goes through any unmounted partition
+    if (!this.isPathMounted(normalizedPath)) {
+      console.warn(`[VFS] Access Denied: Path "${pathStr}" is inside an unmounted partition.`);
+      return null;
+    }
+    
     let current = this.fs['root'];
     const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
     
-    for (const part of parts) {
+    for (const part of stack) {
       const safePart = window.sanitizeKey(part);
       if (!current || current.type !== 'dir' || !safePart) return null;
       
@@ -877,7 +1046,8 @@ export class OSState {
         const isOwner = (current.owner || 'divyanshu') === currentUser;
         const perms = current.permissions || 'rwxr-xr-x';
         const canTraverse = isOwner ? perms[2] === 'x' : (perms[5] === 'x' || perms[8] === 'x');
-        const isAdmin = this.currentSession?.role === 'admin';
+        const userObj = this.users.find(u => u.username === currentUser);
+        const isAdmin = (userObj && userObj.role === 'admin') || currentUser === 'root';
         if (!canTraverse && !isAdmin) {
           console.warn(`[VFS] Traversal Denied: No execute permission on directory "${current.name || '/'}" for user "${currentUser}".`);
           return null;
@@ -889,99 +1059,139 @@ export class OSState {
     return this.touchNode(current);
   }
 
-  writeFile(pathStr, content) {
+  writeFile(pathStr, content, user = null) {
     const parts = pathStr.replace(/^\//, '').split('/').filter(Boolean);
     const fileName = window.sanitizeKey(parts.pop());
     if (!fileName) return false;
-    let current = this.fs['root'];
-    for (const part of parts) {
-      const safePart = window.sanitizeKey(part);
-      if (!safePart) return false;
-      if (!current.children[safePart]) {
-        current.children[safePart] = { type: 'dir', name: safePart, children: {}, owner: this.currentSession.currentUser || 'divyanshu', group: 'staff', permissions: 'rwxr-xr-x' };
+    
+    const parentPath = '/' + parts.join('/');
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    
+    // Check/create parent directories
+    const parentNode = this.resolvePath(parentPath, currentUser);
+    if (!parentNode || parentNode.type !== 'dir') {
+      if (!this.createDir(parentPath, true, currentUser)) {
+        return false;
       }
-      current = current.children[safePart];
     }
-    this.getNodeMetadata(current);
-    const targetFile = current.children[fileName];
-    if (targetFile && !this.canModifyNode(targetFile)) {
+    
+    const resolvedParent = this.resolvePath(parentPath, currentUser);
+    if (!resolvedParent || resolvedParent.type !== 'dir') return false;
+    
+    // Check write permissions on the parent directory itself
+    if (!this.canModifyNode(resolvedParent, currentUser)) return false;
+    
+    const targetFile = resolvedParent.children[fileName];
+    if (targetFile && !this.canModifyNode(targetFile, currentUser)) {
       return false;
     }
     
     // Atomic write safeguard via a temporary swap simulation
     const tempFileKey = `.tmp_${fileName}_${Date.now()}`;
     try {
-      current.children[tempFileKey] = {
+      resolvedParent.children[tempFileKey] = {
         type: 'file',
         name: tempFileKey,
         content: content,
-        owner: (targetFile && targetFile.owner) || this.currentSession.currentUser || 'divyanshu',
+        owner: (targetFile && targetFile.owner) || currentUser,
         group: 'staff',
         permissions: (targetFile && targetFile.permissions) || 'rw-r--r--',
         createdAt: (targetFile && targetFile.createdAt) || Date.now(),
         updatedAt: Date.now(),
-        accessedAt: Date.now(),
-        versionHistory: (targetFile && targetFile.versionHistory) || []
+        accessedAt: Date.now()
       };
       
-      // Store history checkpoint
-      if (targetFile) {
-        current.children[tempFileKey].versionHistory.unshift({
-          content: targetFile.content,
-          updatedAt: targetFile.updatedAt || Date.now()
-        });
-        if (current.children[tempFileKey].versionHistory.length > 5) {
-          current.children[tempFileKey].versionHistory.pop();
-        }
+      // Atomic swap
+      resolvedParent.children[fileName] = resolvedParent.children[tempFileKey];
+      resolvedParent.children[fileName].name = fileName;
+      delete resolvedParent.children[tempFileKey];
+      
+      const fileNode = resolvedParent.children[fileName];
+      if (!fileNode.history) fileNode.history = [];
+      fileNode.history.push({
+        timestamp: Date.now(),
+        content: content,
+        author: currentUser
+      });
+      if (fileNode.history.length > 50) {
+        fileNode.history.shift();
       }
       
-      // Atomic commit
-      current.children[tempFileKey].name = fileName;
-      current.children[fileName] = current.children[tempFileKey];
-      delete current.children[tempFileKey];
+      this.saveState();
+      
+      // Trigger VFS change listeners
+      if (window.AstraBus) {
+        window.AstraBus.emit('fs.changed', { path: pathStr, action: 'write' });
+      }
+      return true;
     } catch (err) {
-      delete current.children[tempFileKey];
-      console.error("Atomic write failed", err);
+      console.error("[VFS] Write error:", err);
+      if (resolvedParent.children[tempFileKey]) {
+        delete resolvedParent.children[tempFileKey];
+      }
       return false;
     }
-
-    const isNew = !targetFile;
-    const actionText = isNew ? `Created file: ${pathStr}` : `Modified file: ${pathStr}`;
-    this.addAuditLog('System', actionText);
-    window.AstraBus?.emit('fs.changed', { path: pathStr, action: actionText });
-    this.saveState();
-    return true;
   }
 
-  createDir(pathStr) {
+  createDir(pathStr, createParents = false, user = null) {
     const parts = pathStr.replace(/^\//, '').split('/').filter(Boolean);
-    let current = this.fs['root'];
-    for (const part of parts) {
-      const safePart = window.sanitizeKey(part);
-      if (!safePart) return false;
-      if (!current.children[safePart]) {
-        current.children[safePart] = { type: 'dir', name: safePart, children: {}, owner: this.currentSession.currentUser || 'divyanshu', group: 'staff', permissions: 'rwxr-xr-x' };
+    if (parts.length === 0) return false;
+    const dirName = window.sanitizeKey(parts.pop());
+    if (!dirName) return false;
+    
+    const parentPath = '/' + parts.join('/');
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    const parentNode = this.resolvePath(parentPath, currentUser);
+    
+    if (!parentNode || parentNode.type !== 'dir') {
+      if (createParents) {
+        if (!this.createDir(parentPath, true, currentUser)) {
+          return false;
+        }
+      } else {
+        return false;
       }
-      current = current.children[safePart];
     }
-    this.getNodeMetadata(current);
+    
+    const resolvedParent = this.resolvePath(parentPath, currentUser);
+    if (!resolvedParent || resolvedParent.type !== 'dir') return false;
+    
+    // Check if we can modify/write to the parent directory to create a directory
+    if (!this.canModifyNode(resolvedParent, currentUser)) return false;
+    
+    if (!resolvedParent.children[dirName]) {
+      resolvedParent.children[dirName] = {
+        type: 'dir',
+        name: dirName,
+        children: {},
+        owner: currentUser,
+        group: 'staff',
+        permissions: 'rwxr-xr-x'
+      };
+    } else {
+      if (!createParents) return false;
+    }
+    
     this.saveState();
     return true;
   }
 
-  deleteFile(pathStr) {
+  deleteFile(pathStr, user = null) {
     const parts = pathStr.replace(/^\//, '').split('/').filter(Boolean);
     const fileName = window.sanitizeKey(parts.pop());
     if (!fileName) return false;
-    let current = this.fs['root'];
-    for (const part of parts) {
-      const safePart = window.sanitizeKey(part);
-      if (!current || !safePart || !current.children[safePart]) return false;
-      current = current.children[safePart];
-    }
-    if (current.children[fileName]) {
-      if (!this.canModifyNode(current.children[fileName])) return false;
-      delete current.children[fileName];
+    
+    const parentPath = '/' + parts.join('/');
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    const parentNode = this.resolvePath(parentPath, currentUser);
+    if (!parentNode || parentNode.type !== 'dir') return false;
+    
+    // Deleting a file requires modify permission on parent directory
+    if (!this.canModifyNode(parentNode, currentUser)) return false;
+    
+    if (parentNode.children[fileName]) {
+      if (!this.canModifyNode(parentNode.children[fileName], currentUser)) return false;
+      delete parentNode.children[fileName];
       this.addAuditLog('System', `Deleted: ${pathStr}`);
       window.AstraBus?.emit('fs.deleted', { path: pathStr });
       this.saveState();
@@ -990,24 +1200,27 @@ export class OSState {
     return false;
   }
 
-  renameFile(pathStr, newName) {
+  renameFile(pathStr, newName, user = null) {
     const parts = pathStr.replace(/^\//, '').split('/').filter(Boolean);
     const oldName = window.sanitizeKey(parts.pop());
     const safeNewName = window.sanitizeKey(newName);
     if (!oldName || !safeNewName) return false;
-    let current = this.fs['root'];
-    for (const part of parts) {
-      const safePart = window.sanitizeKey(part);
-      if (!current || !safePart || !current.children[safePart]) return false;
-      current = current.children[safePart];
-    }
-    if (current.children[oldName]) {
-      if (!this.canModifyNode(current.children[oldName])) return false;
-      const node = current.children[oldName];
+    
+    const parentPath = '/' + parts.join('/');
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    const parentNode = this.resolvePath(parentPath, currentUser);
+    if (!parentNode || parentNode.type !== 'dir') return false;
+    
+    // Renaming requires modify permission on parent directory
+    if (!this.canModifyNode(parentNode, currentUser)) return false;
+    
+    if (parentNode.children[oldName]) {
+      if (!this.canModifyNode(parentNode.children[oldName], currentUser)) return false;
+      const node = parentNode.children[oldName];
       node.name = safeNewName;
       node.updatedAt = Date.now();
-      current.children[safeNewName] = node;
-      delete current.children[oldName];
+      parentNode.children[safeNewName] = node;
+      delete parentNode.children[oldName];
       this.addAuditLog('System', `Renamed ${oldName} → ${safeNewName}`);
       window.AstraBus?.emit('fs.renamed', { from: pathStr, to: safeNewName });
       this.saveState();
@@ -1016,24 +1229,102 @@ export class OSState {
     return false;
   }
 
-  copyFile(srcPath, dstPath) {
-    const srcNode = this.resolvePath(srcPath);
-    if (!srcNode || srcNode.type !== 'file') return false;
-    const dstParts = dstPath.replace(/^\//, '').split('/').filter(Boolean);
-    const dstParentPath = dstParts.length > 1 ? `/${dstParts.slice(0, -1).join('/')}` : '/';
-    const dstParent = this.resolvePath(dstParentPath);
-    if (!this.canReadNode(srcNode) || !this.canModifyNode(dstParent || srcNode)) return false;
-    this.writeFile(dstPath, srcNode.content);
-    return true;
-  }
-
-  moveFile(srcPath, dstPath) {
-    if (this.copyFile(srcPath, dstPath)) {
-      this.deleteFile(srcPath);
+  copyFile(srcPath, dstPath, user = null) {
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    const srcNode = this.resolvePath(srcPath, currentUser);
+    if (!srcNode) return false;
+    
+    if (srcNode.type === 'file') {
+      const success = this.writeFile(dstPath, srcNode.content, currentUser);
+      if (success) {
+        const dstNode = this.resolvePath(dstPath, currentUser);
+        if (dstNode) {
+          dstNode.owner = srcNode.owner || 'divyanshu';
+          dstNode.permissions = srcNode.permissions || 'rw-r--r--';
+          dstNode.createdAt = srcNode.createdAt || Date.now();
+          dstNode.updatedAt = Date.now();
+          this.saveState();
+        }
+        return true;
+      }
+    } else if (srcNode.type === 'dir') {
+      const success = this.createDir(dstPath, true, currentUser);
+      if (!success) return false;
+      const dstNode = this.resolvePath(dstPath, currentUser);
+      if (dstNode) {
+        dstNode.owner = srcNode.owner || 'divyanshu';
+        dstNode.permissions = srcNode.permissions || 'rwxr-xr-x';
+      }
+      for (const name of Object.keys(srcNode.children || {})) {
+        if (!this.copyFile(`${srcPath}/${name}`, `${dstPath}/${name}`, currentUser)) {
+          return false;
+        }
+      }
       return true;
     }
     return false;
   }
+
+  moveFile(srcPath, dstPath, user = null) {
+    const currentUser = user || this.currentSession?.currentUser || 'divyanshu';
+    
+    const srcNode = this.resolvePath(srcPath, currentUser);
+    if (!srcNode) return false;
+    
+    const dstParts = dstPath.replace(/^\//, '').split('/').filter(Boolean);
+    const dstName = window.sanitizeKey(dstParts.pop());
+    const dstParentPath = dstParts.length > 0 ? `/${dstParts.join('/')}` : '/';
+    const dstParent = this.resolvePath(dstParentPath, currentUser);
+    if (!dstParent || dstParent.type !== 'dir') return false;
+    
+    const srcParts = srcPath.replace(/^\//, '').split('/').filter(Boolean);
+    const srcName = window.sanitizeKey(srcParts.pop());
+    const srcParentPath = srcParts.length > 0 ? `/${srcParts.join('/')}` : '/';
+    const srcParent = this.resolvePath(srcParentPath, currentUser);
+    if (!srcParent || !this.canModifyNode(srcParent, currentUser)) return false;
+    
+    if (!this.canModifyNode(dstParent, currentUser)) return false;
+    
+    dstParent.children[dstName] = srcNode;
+    delete srcParent.children[srcName];
+    
+    srcNode.name = dstName;
+    srcNode.updatedAt = Date.now();
+    
+    this.addAuditLog('System', `Moved: ${srcPath} → ${dstPath}`);
+    window.AstraBus?.emit('fs.changed', { type: 'move', from: srcPath, to: dstPath });
+    this.saveState();
+    return true;
+  }
+
+  releaseLocksForOwner(owner) {
+    const beforeLength = this.locks.length;
+    this.locks = this.locks.filter(l => l.owner !== owner);
+    if (this.locks.length !== beforeLength) {
+      this.saveState();
+    }
+  }
+
+  cancelPendingApprovalsForCaller(callerId) {
+    const beforeLength = this.approvalsQueue.length;
+    this.approvalsQueue = this.approvalsQueue.filter(req => req.callerId !== callerId);
+    if (this.approvalsQueue.length !== beforeLength) {
+      this.saveState();
+      window.AstraBus?.emit('approvals.changed', { action: 'cleanup', callerId });
+    }
+  }
+
+  cleanupStaleLocks() {
+    const now = Date.now();
+    const TIMEOUT = 5 * 60 * 1000; // 5 minutes
+    const beforeCount = this.locks.length;
+    this.locks = this.locks.filter(l => (now - l.timestamp) < TIMEOUT);
+    if (this.locks.length !== beforeCount) {
+      this.saveState();
+      this.addAuditLog('System', 'Cleaned up stale filesystem locks.');
+    }
+  }
+
 
   // ==========================================
   // Memory Graph Accessors

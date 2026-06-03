@@ -8,6 +8,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:,">
+  <link rel="manifest" href="manifest.json">
 </head>
 <body>
   <!-- System Background and Wallpaper -->
@@ -55,6 +57,17 @@
 
   <!-- Global Context Menu -->
   <div id="context-menu" class="context-menu hidden"></div>
+
+  <!-- Safe Mode Warning Banner -->
+  <div id="safe-mode-banner" class="safe-mode-banner hidden">
+    <span class="shield-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+      </svg>
+    </span>
+    <span class="banner-text">SAFE MODE — Agent writes, spawns, and settings changes are blocked for non-admin processes</span>
+    <button class="exit-btn" id="safe-mode-exit-btn">EXIT SAFE MODE</button>
+  </div>
 
   <!-- Top Menu Bar (macOS style) -->
   <header id="menu-bar" class="menu-bar">
@@ -573,6 +586,14 @@
             <span class="option-name">Continue active project task...</span>
             <span class="option-desc">Auto-drafts, codes, and builds while tracking state</span>
           </li>
+          <li class="palette-option" data-command="ai-report">
+            <span class="option-name">Create a system report</span>
+            <span class="option-desc">Runs logs compilation, CPU status check, and generates report</span>
+          </li>
+          <li class="palette-option" data-command="ai-audit">
+            <span class="option-name">Audit this project</span>
+            <span class="option-desc">Inspects packages, structure, and drafts next-actions tasks</span>
+          </li>
           <li class="palette-option" data-command="ai-summarize">
             <span class="option-name">Summarize active workspace</span>
             <span class="option-desc">Generates workspace summary in Chat</span>
@@ -751,5 +772,14 @@
 
   <!-- Script Modules -->
   <script type="module" src="js/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+          .then(reg => console.log('[PWA] Service Worker registered with scope:', reg.scope))
+          .catch(err => console.error('[PWA] Service Worker registration failed:', err));
+      });
+    }
+  </script>
 </body>
 </html>

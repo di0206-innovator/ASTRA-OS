@@ -64,38 +64,93 @@ export class AppRuntime {
       'sysmonitor': ['proc:spawn', 'proc:kill']
     };
     
-    const allowed = manifests[appId] || [];
+    const safeAppId = window.sanitizeKey(appId);
+    const allowed = (safeAppId ? Reflect.get(manifests, safeAppId) : null) || [];
     return allowed.includes(permission);
   }
 
   getActiveCallerId() {
-    // Identify the active caller based on the focused UI window
+    let appName = 'user';
     if (this.ui && this.ui.state && this.ui.state.activeWindow) {
-      return this.ui.state.activeWindow;
+      appName = this.ui.state.activeWindow;
+    } else if (window.AstraAgentOrchestrator && window.AstraAgentOrchestrator.activeWorkflow) {
+      appName = window.AstraAgentOrchestrator.currentAgentId || 'AstraAgent';
     }
-    // If the agent orchestrator is executing an active workflow, attribute to it
-    if (window.AstraAgentOrchestrator && window.AstraAgentOrchestrator.activeWorkflow) {
-      return window.AstraAgentOrchestrator.currentAgentId || 'AstraAgent';
+    
+    const proc = this.state.processTable.find(p => p.name === appName && p.state === 'RUNNING');
+    if (proc && proc.token) {
+      return proc.token;
     }
-    return 'user';
+    return 'sys_session';
   }
 
-  getContext(appId) {
+  getContext(appId, token = null) {
+    if (!token) {
+      const proc = this.state.processTable.find(p => p.name === appId && p.state === 'RUNNING');
+      token = proc ? proc.token : null;
+      if (!token) {
+        const newProc = this.kernel.spawnProcess(appId, 5);
+        token = newProc.token;
+      }
+    }
+
+    const stateProxy = new Proxy(this.state, {
+      get: (target, prop) => {
+        const val = Reflect.get(target, prop);
+        if (typeof val === 'function') {
+          return val.bind(target);
+        }
+        if (typeof val === 'object' && val !== null) {
+          return new Proxy(val, {
+            set: () => {
+              console.error(`[Security] Blocked direct mutation on state.${String(prop)}.`);
+              throw new Error("Direct state mutations are blocked. Use system calls.");
+            }
+          });
+        }
+        return val;
+      },
+      set: () => {
+        console.error("[Security] Blocked direct mutation on state.");
+        throw new Error("Direct state mutations are blocked. Use system calls.");
+      }
+    });
+
     return {
       appId,
+      token,
+      state: stateProxy,
+      
       fs: {
-        read: (path) => this.kernel.syscall(appId, 'fs:read', [path]),
-        write: (path, content, append = false) => this.kernel.syscall(appId, 'fs:write', [path, content, append]),
-        lock: (path, type = 'shared') => this.kernel.syscall(appId, 'fs:lock', [path, type]),
-        unlock: (path) => this.kernel.syscall(appId, 'fs:unlock', [path])
+        read: (path) => this.kernel.syscall(token, 'fs:read', [path]),
+        write: (path, content, append = false) => this.kernel.syscall(token, 'fs:write', [path, content, append]),
+        lock: (path, type = 'shared') => this.kernel.syscall(token, 'fs:lock', [path, type]),
+        unlock: (path) => this.kernel.syscall(token, 'fs:unlock', [path]),
+        delete: (path) => this.kernel.syscall(token, 'fs:delete', [path]),
+        mkdir: (path, createParents = false) => this.kernel.syscall(token, 'fs:mkdir', [path, createParents]),
+        rename: (path, newName) => this.kernel.syscall(token, 'fs:rename', [path, newName]),
+        copy: (path, dstPath) => this.kernel.syscall(token, 'fs:copy', [path, dstPath]),
+        move: (path, dstPath) => this.kernel.syscall(token, 'fs:move', [path, dstPath])
       },
       process: {
-        spawn: (name, parentPid) => this.kernel.syscall(appId, 'proc:spawn', [name, parentPid]),
-        kill: (pid) => this.kernel.syscall(appId, 'proc:kill', [pid])
+        spawn: (name, parentPid) => this.kernel.syscall(token, 'proc:spawn', [name, parentPid]),
+        kill: (pid) => this.kernel.syscall(token, 'proc:kill', [pid])
       },
-      emit: (eventName, payload) => this.bus.emit(eventName, { appId, ...payload }),
+      settings: {
+        read: () => this.kernel.syscall(token, 'settings:read', []),
+        write: (settings) => this.kernel.syscall(token, 'settings:write', [settings])
+      },
+      tasks: {
+        add: (title, desc, status, assigned) => this.kernel.syscall(token, 'task:add', [title, desc, status, assigned]),
+        updateStatus: (id, status) => this.kernel.syscall(token, 'task:updateStatus', [id, status])
+      },
       
-      // Lifecycle hook registration bindings
+      showToast: (title, message, type) => this.ui.showToast(title, message, type),
+      openApp: (id) => this.ui.openApp(id),
+      closeApp: (id) => this.ui.closeApp(id),
+      
+      emit: (eventName, payload) => this.bus.emit(eventName, { appId, token, ...payload }),
+      
       onSuspend: (cb) => this.ui.registerLifecycleHook(appId, 'suspend', cb),
       onResume: (cb) => this.ui.registerLifecycleHook(appId, 'resume', cb),
       onDestroy: (cb) => this.ui.registerLifecycleHook(appId, 'destroy', cb)

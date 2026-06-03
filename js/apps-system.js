@@ -24,6 +24,7 @@ window.AstraApps.sysmonitor = function(container, ui) {
           <button class="sm-tab active" data-tab="processes">Processes</button>
           <button class="sm-tab" data-tab="performance">Performance</button>
           <button class="sm-tab" data-tab="disk">Disk</button>
+          <button class="sm-tab" data-tab="observability">Observability</button>
         </div>
         <div class="sysmonitor-content" id="sm-content"></div>
       </div>
@@ -41,6 +42,22 @@ window.AstraApps.sysmonitor = function(container, ui) {
     refreshInterval = setInterval(updateStats, 1500);
     updateStats();
     renderContent();
+
+    if (typeof ui.onDestroy === 'function') {
+      ui.onDestroy(() => {
+        if (refreshInterval) {
+          clearInterval(refreshInterval);
+          refreshInterval = null;
+        }
+      });
+    } else if (typeof ui.registerLifecycleHook === 'function') {
+      ui.registerLifecycleHook('sysmonitor', 'destroy', () => {
+        if (refreshInterval) {
+          clearInterval(refreshInterval);
+          refreshInterval = null;
+        }
+      });
+    }
   }
 
   function updateStats() {
@@ -73,6 +90,13 @@ window.AstraApps.sysmonitor = function(container, ui) {
     if (activeTab === 'processes') renderProcesses(el);
     else if (activeTab === 'performance') renderPerformance(el);
     else if (activeTab === 'disk') renderDisk(el);
+    else if (activeTab === 'observability') {
+      if (window.AstraUI && window.AstraUI.renderObservabilityPanel) {
+        window.AstraUI.renderObservabilityPanel(el);
+      } else {
+        window.renderSafeHTML(el, '<div style="padding:20px;color:var(--text-muted)">Observability data unavailable</div>');
+      }
+    }
   }
 
   function renderProcesses(el) {
@@ -99,20 +123,18 @@ window.AstraApps.sysmonitor = function(container, ui) {
     function generateTreeHTML(node, depth = 0) {
       const indent = '&nbsp;&nbsp;&nbsp;&nbsp;'.repeat(depth);
       const prefix = depth > 0 ? '└─ ' : '';
-      const nameHTML = `${indent}${prefix}<strong>${window.escapeHTML(node.name)}</strong>`;
+      const nameHTML = indent + prefix + '<strong>' + window.escapeHTML(node.name) + '</strong>';
       
-      const btn = node.pid > 8 ? `<button class="btn-kill" data-pid="${node.pid}" title="Kill Process" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 10px;">✕ Kill</button>` : '';
+      const btn = node.pid > 8 ? '<button class="btn-kill" data-pid="' + window.escapeHTML(node.pid) + '" title="Kill Process" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 10px;">✕ Kill</button>' : '';
       
-      let rows = `
-        <tr>
-          <td class="font-mono">${node.pid}</td>
-          <td>${nameHTML}</td>
-          <td><span class="proc-state proc-${node.state.toLowerCase()}">${node.state}</span></td>
-          <td class="font-mono">${node.cpuPercent}%</td>
-          <td class="font-mono">${node.memMB} MB</td>
-          <td>${btn}</td>
-        </tr>
-      `;
+      let rows = '<tr>' +
+        '<td class="font-mono">' + window.escapeHTML(node.pid) + '</td>' +
+        '<td>' + nameHTML + '</td>' +
+        '<td><span class="proc-state proc-' + window.escapeHTML(node.state.toLowerCase()) + '">' + window.escapeHTML(node.state) + '</span></td>' +
+        '<td class="font-mono">' + window.escapeHTML(node.cpuPercent) + '%</td>' +
+        '<td class="font-mono">' + window.escapeHTML(node.memMB) + ' MB</td>' +
+        '<td>' + btn + '</td>' +
+      '</tr>';
       
       // Sort children by PID
       node.children.sort((a, b) => a.pid - b.pid);
@@ -209,17 +231,16 @@ window.AstraApps.sysmonitor = function(container, ui) {
       const pct = Math.floor((p.usedGB / p.sizeGB) * 100);
       const name = p.label || p.device;
       const status = p.mounted ? '🟢 Mounted' : '⚪ Unmounted';
-      const color = pct > 80 ? 'var(--color-red)' : 'var(--color-purple)';
-      return `
-        <div class="disk-part-card">
-          <div class="disk-part-header">
-            <span class="disk-part-name">${name}</span>
-            <span class="disk-part-mount">${p.mountpoint} — ${p.fsType}</span>
-          </div>
-          <div class="disk-bar-bg"><div class="disk-bar-fill" style="width: ${pct}%; background: ${color}"></div></div>
-          <div class="disk-part-info">${p.usedGB}GB / ${p.sizeGB}GB (${pct}%) — ${status}</div>
-        </div>
-      `;
+      const safePct = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : 0;
+      const safeColor = safePct > 80 ? 'var(--color-red)' : 'var(--color-purple)';
+      return '<div class="disk-part-card">' +
+          '<div class="disk-part-header">' +
+            '<span class="disk-part-name">' + window.escapeHTML(name) + '</span>' +
+            '<span class="disk-part-mount">' + window.escapeHTML(p.mountpoint) + ' — ' + window.escapeHTML(p.fsType) + '</span>' +
+          '</div>' +
+          '<div class="disk-bar-bg"><div class="disk-bar-fill" style="width: ' + safePct + '%; background: ' + safeColor + '"></div></div>' +
+          '<div class="disk-part-info">' + window.escapeHTML(p.usedGB) + 'GB / ' + window.escapeHTML(p.sizeGB) + 'GB (' + safePct + '%) — ' + window.escapeHTML(status) + '</div>' +
+        '</div>';
     }).join('');
 
     window.renderSafeHTML(el, `
@@ -450,13 +471,14 @@ window.AstraApps.settings = function(container, ui) {
         </div>
         <button class="btn btn-primary" id="save-general">Save Changes</button>
       `);
-      el.querySelector('#save-general')?.addEventListener('click', () => {
-        reg.system.hostname = el.querySelector('#set-hostname').value;
-        reg.system.timeFormat = el.querySelector('#set-timeformat').value;
+      el.querySelector('#save-general')?.addEventListener('click', async () => {
+        const hostname = el.querySelector('#set-hostname').value;
+        const timeFormat = el.querySelector('#set-timeformat').value;
         const checkedApps = [];
         el.querySelectorAll('.settings-toggles input:checked').forEach(c => checkedApps.push(c.getAttribute('data-app')));
-        reg.system.startupApps = checkedApps;
-        ui.state.saveState();
+        await window.Astra.syscall('ui:setRegistryVal', 'system', 'hostname', hostname);
+        await window.Astra.syscall('ui:setRegistryVal', 'system', 'timeFormat', timeFormat);
+        await window.Astra.syscall('ui:setRegistryVal', 'system', 'startupApps', checkedApps);
         ui.showToast('Settings Saved', 'General settings updated.', 'success');
       });
 
@@ -491,49 +513,48 @@ window.AstraApps.settings = function(container, ui) {
       el.querySelectorAll('.color-swatch').forEach(btn => {
         btn.addEventListener('click', () => {
           const color = btn.getAttribute('data-color');
-          reg.appearance.accentColor = color;
           el.querySelectorAll('.color-swatch').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           applyAccentColor(color);
-          ui.state.saveState();
-          ui.showToast('Theme Updated', `Accent color set to ${color}.`, 'success');
+          window.Astra.syscall('ui:setRegistryVal', 'appearance', 'accentColor', color).then(() => {
+            ui.showToast('Theme Updated', `Accent color set to ${color}.`, 'success');
+          });
         });
       });
       el.querySelectorAll('.wallpaper-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const wp = btn.getAttribute('data-wp');
-          reg.appearance.wallpaper = wp;
           el.querySelectorAll('.wallpaper-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           applyWallpaper(wp);
-          ui.state.saveState();
+          window.Astra.syscall('ui:setRegistryVal', 'appearance', 'wallpaper', wp);
         });
       });
       el.querySelector('#set-fontsize')?.addEventListener('input', (e) => {
-        reg.appearance.fontSize = parseInt(e.target.value);
-        el.querySelector('#fs-val').textContent = e.target.value + 'px';
-        document.documentElement.style.fontSize = e.target.value + 'px';
-        ui.state.saveState();
+        const val = parseInt(e.target.value);
+        el.querySelector('#fs-val').textContent = val + 'px';
+        document.documentElement.style.fontSize = val + 'px';
+        window.Astra.syscall('ui:setRegistryVal', 'appearance', 'fontSize', val);
       });
 
     } else if (activeSection === 'security') {
-      window.renderSafeHTML(el, `
-        <h3>Security & Privacy</h3>
-        <div class="settings-group">
-          <label>Change Password</label>
-          <input type="password" class="settings-input" placeholder="Current password" id="sec-old-pass">
-          <input type="password" class="settings-input" placeholder="New password" id="sec-new-pass" style="margin-top: 6px">
-          <button class="btn btn-secondary" id="sec-change-pass" style="margin-top: 8px">Update Password</button>
-        </div>
-        <div class="settings-group">
-          <label>Auto-Lock Timeout (seconds)</label>
-          <input type="number" class="settings-input" value="${reg.security.autoLockTimeout}" id="sec-lock-timeout" min="30" max="3600">
-        </div>
-        <div class="settings-group">
-          <label class="toggle-label"><input type="checkbox" id="sec-enforce-perms" ${reg.security.enforcePermissions ? 'checked' : ''}> Enforce file permissions</label>
-        </div>
-        <button class="btn btn-primary" id="save-security">Save</button>
-      `);
+      window.renderSafeHTML(el, 
+        '<h3>Security & Privacy</h3>' +
+        '<div class="settings-group">' +
+          '<label>Change Password</label>' +
+          '<input type="password" class="settings-input" placeholder="Current password" id="sec-old-pass">' +
+          '<input type="password" class="settings-input" placeholder="New password" id="sec-new-pass" style="margin-top: 6px">' +
+          '<button class="btn btn-secondary" id="sec-change-pass" style="margin-top: 8px">Update Password</button>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>Auto-Lock Timeout (seconds)</label>' +
+          '<input type="number" class="settings-input" value="' + window.escapeHTML(reg.security.autoLockTimeout) + '" id="sec-lock-timeout" min="30" max="3600">' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label class="toggle-label"><input type="checkbox" id="sec-enforce-perms" ' + window.escapeHTML(reg.security.enforcePermissions ? 'checked' : '') + '> Enforce file permissions</label>' +
+        '</div>' +
+        '<button class="btn btn-primary" id="save-security">Save</button>'
+      );
       el.querySelector('#sec-change-pass')?.addEventListener('click', () => {
         const kernel = window.AstraKernel;
         if (!kernel) return;
@@ -545,10 +566,11 @@ window.AstraApps.settings = function(container, ui) {
           ui.showToast('Error', 'Current password is incorrect.', 'error');
         }
       });
-      el.querySelector('#save-security')?.addEventListener('click', () => {
-        reg.security.autoLockTimeout = parseInt(el.querySelector('#sec-lock-timeout').value) || 300;
-        reg.security.enforcePermissions = el.querySelector('#sec-enforce-perms').checked;
-        ui.state.saveState();
+      el.querySelector('#save-security')?.addEventListener('click', async () => {
+        const autoLockTimeout = parseInt(el.querySelector('#sec-lock-timeout').value) || 300;
+        const enforcePermissions = el.querySelector('#sec-enforce-perms').checked;
+        await window.Astra.syscall('ui:setRegistryVal', 'security', 'autoLockTimeout', autoLockTimeout);
+        await window.Astra.syscall('ui:setRegistryVal', 'security', 'enforcePermissions', enforcePermissions);
         ui.showToast('Security Settings Saved', '', 'success');
       });
 
@@ -557,59 +579,57 @@ window.AstraApps.settings = function(container, ui) {
       const netListHTML = net.availableNetworks.map(n => {
         const connectedClass = n.connected ? 'connected' : '';
         const connectedText = n.connected ? '✓ Connected' : '';
-        return `
-          <div class="net-item ${connectedClass}">
-            <span>${n.ssid} (${n.security})</span>
-            <span>${n.signal}% ${connectedText}</span>
-          </div>
-        `;
+        return '<div class="net-item ' + window.escapeHTML(connectedClass) + '">' +
+            '<span>' + window.escapeHTML(n.ssid) + ' (' + window.escapeHTML(n.security) + ')</span>' +
+            '<span>' + window.escapeHTML(n.signal) + '% ' + window.escapeHTML(connectedText) + '</span>' +
+          '</div>';
       }).join('');
 
-      window.renderSafeHTML(el, `
-        <h3>Network</h3>
-        <div class="settings-group">
-          <label>Wi-Fi Status</label>
-          <div class="net-card">${net.wlan0.ssid} — Signal ${net.wlan0.signal}% — IP: ${net.wlan0.ip}</div>
-        </div>
-        <div class="settings-group">
-          <label>Available Networks</label>
-          <div class="net-list">
-            ${netListHTML}
-          </div>
-        </div>
-        <div class="settings-group">
-          <label>DNS Server</label>
-          <input class="settings-input" value="${net.dns}" disabled>
-        </div>
-        <div class="settings-group">
-          <label class="toggle-label"><input type="checkbox" id="net-airplane" ${net.airplaneMode ? 'checked' : ''}> Airplane Mode</label>
-        </div>
-      `);
+      window.renderSafeHTML(el, 
+        '<h3>Network</h3>' +
+        '<div class="settings-group">' +
+          '<label>Wi-Fi Status</label>' +
+          '<div class="net-card">' + window.escapeHTML(net.wlan0.ssid) + ' — Signal ' + window.escapeHTML(net.wlan0.signal) + '% — IP: ' + window.escapeHTML(net.wlan0.ip) + '</div>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>Available Networks</label>' +
+          '<div class="net-list">' +
+            netListHTML +
+          '</div>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>DNS Server</label>' +
+          '<input class="settings-input" value="' + window.escapeHTML(net.dns) + '" disabled>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label class="toggle-label"><input type="checkbox" id="net-airplane" ' + window.escapeHTML(net.airplaneMode ? 'checked' : '') + '> Airplane Mode</label>' +
+        '</div>'
+      );
       el.querySelector('#net-airplane')?.addEventListener('change', (e) => {
-        net.airplaneMode = e.target.checked;
-        ui.state.saveState();
-        ui.showToast('Network', e.target.checked ? 'Airplane mode enabled.' : 'Airplane mode disabled.', 'info');
+        window.Astra.syscall('ui:setNetworkVar', 'airplaneMode', e.target.checked).then(() => {
+          ui.showToast('Network', e.target.checked ? 'Airplane mode enabled.' : 'Airplane mode disabled.', 'info');
+        });
       });
 
     } else if (activeSection === 'storage') {
       const parts = hw.storage.partitions;
       const totalUsed = parts.reduce((s, p) => s + p.usedGB, 0);
       const totalSize = parts.reduce((s, p) => s + p.sizeGB, 0);
-      window.renderSafeHTML(el, `
-        <h3>Storage</h3>
-        <div class="settings-group">
-          <label>Total Usage: ${totalUsed}GB / ${totalSize}GB</label>
-          <div class="disk-bar-bg"><div class="disk-bar-fill" style="width: ${Math.floor(totalUsed / totalSize * 100)}%"></div></div>
-        </div>
-        <div class="settings-group">
-          <label>Trash: ${ui.state.trash.length} items</label>
-          <button class="btn btn-secondary" id="btn-empty-trash">Empty Trash</button>
-        </div>
-        <div class="settings-group">
-          <label>Export Virtual Filesystem</label>
-          <button class="btn btn-secondary" id="btn-export-vfs">Download VFS as JSON</button>
-        </div>
-      `);
+      window.renderSafeHTML(el, 
+        '<h3>Storage</h3>' +
+        '<div class="settings-group">' +
+          '<label>Total Usage: ' + window.escapeHTML(totalUsed) + 'GB / ' + window.escapeHTML(totalSize) + 'GB</label>' +
+          '<div class="disk-bar-bg"><div class="disk-bar-fill" style="width: ' + window.escapeHTML(Math.floor(totalUsed / totalSize * 100)) + '%"></div></div>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>Trash: ' + window.escapeHTML(ui.state.trash.length) + ' items</label>' +
+          '<button class="btn btn-secondary" id="btn-empty-trash">Empty Trash</button>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>Export Virtual Filesystem</label>' +
+          '<button class="btn btn-secondary" id="btn-export-vfs">Download VFS as JSON</button>' +
+        '</div>'
+      );
       el.querySelector('#btn-empty-trash')?.addEventListener('click', () => {
         const kernel = window.AstraKernel;
         if (kernel) { const c = kernel.emptyTrash(); ui.showToast('Trash Emptied', `${c} items permanently deleted.`, 'info'); renderSection(); }
@@ -624,56 +644,61 @@ window.AstraApps.settings = function(container, ui) {
       });
 
     } else if (activeSection === 'ai') {
-      window.renderSafeHTML(el, `
-        <h3>AI & LLM Orchestration</h3>
-        <div class="settings-group">
-          <label>Agent Mode / Provider</label>
-          <select class="settings-select" id="ai-provider">
-            <option value="simulated" ${reg.ai.provider === 'simulated' ? 'selected' : ''}>Simulated Multi-Agent (No Key Required)</option>
-            <option value="gemini" ${reg.ai.provider === 'gemini' ? 'selected' : ''}>Real Gemini API Agent</option>
-          </select>
-        </div>
-        <div class="settings-group">
-          <label>Gemini API Key</label>
-          <input type="password" class="settings-input" id="ai-apikey" value="${reg.ai.apiKey || ''}" placeholder="Enter Gemini API Key (AIzaSy...)">
-          <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">Stored locally in your browser's localStorage.</span>
-        </div>
-        <div class="settings-group">
-          <label>LLM Model</label>
-          <select class="settings-select" id="ai-model">
-            <option value="gemini-1.5-flash" ${reg.ai.model === 'gemini-1.5-flash' ? 'selected' : ''}>gemini-1.5-flash (Fast & Recommended)</option>
-            <option value="gemini-1.5-pro" ${reg.ai.model === 'gemini-1.5-pro' ? 'selected' : ''}>gemini-1.5-pro (High intelligence)</option>
-          </select>
-        </div>
-        <div class="settings-group">
-          <label>Temperature: <span id="ai-temp-val">${reg.ai.temperature || 0.7}</span></label>
-          <input type="range" min="0" max="1" step="0.1" value="${reg.ai.temperature || 0.7}" id="ai-temp" class="settings-range">
-        </div>
-        <div class="settings-group">
-          <label>System Instructions Prompt</label>
-          <textarea class="settings-textarea" id="ai-prompt" style="width: 100%; height: 80px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-glass); border-radius: 6px; padding: 8px; color: var(--text-primary); font-family: var(--font-sans); font-size: 12.5px;" rows="3">${reg.ai.systemPrompt || ''}</textarea>
-        </div>
-        <div class="settings-group">
-          <label class="toggle-label"><input type="checkbox" id="ai-voice" ${reg.ai.voiceEnabled ? 'checked' : ''}> Voice Responses (Text-to-Speech)</label>
-        </div>
-        <div class="settings-actions" style="display: flex; gap: 10px; margin-top: 15px;">
-          <button class="btn btn-primary" id="save-ai">Save AI Config</button>
-          <button class="btn btn-secondary" id="test-ai">Test Connection</button>
-        </div>
-      `);
+      window.renderSafeHTML(el, 
+        '<h3>AI & LLM Orchestration</h3>' +
+        '<div class="settings-group">' +
+          '<label>Agent Mode / Provider</label>' +
+          '<select class="settings-select" id="ai-provider">' +
+            '<option value="simulated" ' + window.escapeHTML(reg.ai.provider === 'simulated' ? 'selected' : '') + '>Simulated Multi-Agent (No Key Required)</option>' +
+            '<option value="gemini" ' + window.escapeHTML(reg.ai.provider === 'gemini' ? 'selected' : '') + '>Real Gemini API Agent</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>Gemini API Key</label>' +
+          '<input type="password" class="settings-input" id="ai-apikey" value="' + window.escapeHTML(reg.ai.apiKey || '') + '" placeholder="Enter Gemini API Key (AIzaSy...)">' +
+          '<span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">Stored locally in your browser\'s localStorage.</span>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>LLM Model</label>' +
+          '<select class="settings-select" id="ai-model">' +
+            '<option value="gemini-1.5-flash" ' + window.escapeHTML(reg.ai.model === 'gemini-1.5-flash' ? 'selected' : '') + '>gemini-1.5-flash (Fast & Recommended)</option>' +
+            '<option value="gemini-1.5-pro" ' + window.escapeHTML(reg.ai.model === 'gemini-1.5-pro' ? 'selected' : '') + '>gemini-1.5-pro (High intelligence)</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>Temperature: <span id="ai-temp-val">' + window.escapeHTML(reg.ai.temperature || 0.7) + '</span></label>' +
+          '<input type="range" min="0" max="1" step="0.1" value="' + window.escapeHTML(reg.ai.temperature || 0.7) + '" id="ai-temp" class="settings-range">' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label>System Instructions Prompt</label>' +
+          '<textarea class="settings-textarea" id="ai-prompt" style="width: 100%; height: 80px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-glass); border-radius: 6px; padding: 8px; color: var(--text-primary); font-family: var(--font-sans); font-size: 12.5px;" rows="3">' + window.escapeHTML(reg.ai.systemPrompt || '') + '</textarea>' +
+        '</div>' +
+        '<div class="settings-group">' +
+          '<label class="toggle-label"><input type="checkbox" id="ai-voice" ' + window.escapeHTML(reg.ai.voiceEnabled ? 'checked' : '') + '> Voice Responses (Text-to-Speech)</label>' +
+        '</div>' +
+        '<div class="settings-actions" style="display: flex; gap: 10px; margin-top: 15px;">' +
+          '<button class="btn btn-primary" id="save-ai">Save AI Config</button>' +
+          '<button class="btn btn-secondary" id="test-ai">Test Connection</button>' +
+        '</div>'
+      );
 
       el.querySelector('#ai-temp')?.addEventListener('input', (e) => {
         el.querySelector('#ai-temp-val').textContent = e.target.value;
       });
 
-      el.querySelector('#save-ai')?.addEventListener('click', () => {
-        reg.ai.provider = el.querySelector('#ai-provider').value;
-        reg.ai.apiKey = el.querySelector('#ai-apikey').value.trim();
-        reg.ai.model = el.querySelector('#ai-model').value;
-        reg.ai.temperature = parseFloat(el.querySelector('#ai-temp').value) || 0.7;
-        reg.ai.systemPrompt = el.querySelector('#ai-prompt').value;
-        reg.ai.voiceEnabled = el.querySelector('#ai-voice').checked;
-        ui.state.saveState();
+      el.querySelector('#save-ai')?.addEventListener('click', async () => {
+        const provider = el.querySelector('#ai-provider').value;
+        const apiKey = el.querySelector('#ai-apikey').value.trim();
+        const model = el.querySelector('#ai-model').value;
+        const temperature = parseFloat(el.querySelector('#ai-temp').value) || 0.7;
+        const systemPrompt = el.querySelector('#ai-prompt').value;
+        const voiceEnabled = el.querySelector('#ai-voice').checked;
+        await window.Astra.syscall('ui:setRegistryVal', 'ai', 'provider', provider);
+        await window.Astra.syscall('ui:setRegistryVal', 'ai', 'apiKey', apiKey);
+        await window.Astra.syscall('ui:setRegistryVal', 'ai', 'model', model);
+        await window.Astra.syscall('ui:setRegistryVal', 'ai', 'temperature', temperature);
+        await window.Astra.syscall('ui:setRegistryVal', 'ai', 'systemPrompt', systemPrompt);
+        await window.Astra.syscall('ui:setRegistryVal', 'ai', 'voiceEnabled', voiceEnabled);
         ui.showToast('AI Config Saved', 'AI Engine settings successfully updated.', 'success');
       });
 
@@ -706,22 +731,22 @@ window.AstraApps.settings = function(container, ui) {
       });
 
     } else if (activeSection === 'about') {
-      window.renderSafeHTML(el, `
-        <h3>About Astra OS</h3>
-        <div class="about-card">
-          <div class="about-logo">△</div>
-          <div class="about-title">Astra OS</div>
-          <div class="about-version">Version 1.0 (Quantum)</div>
-          <div class="about-detail">Kernel: astra-kernel 6.2.0</div>
-          <div class="about-detail">Build: 2026.05.22</div>
-          <div class="about-detail">Architecture: ${hw.cpu.architecture}</div>
-          <div class="about-detail">CPU: ${hw.cpu.model}</div>
-          <div class="about-detail">GPU: ${hw.gpu.model}</div>
-          <div class="about-detail">RAM: ${hw.ram.totalGB}GB ${hw.ram.type}</div>
-          <div class="about-detail">Display: ${hw.display.resolution} @ ${hw.display.refreshRate}</div>
-          <div class="about-credit">Designed and built by Divyanshu Sinha</div>
-        </div>
-      `);
+      window.renderSafeHTML(el, 
+        '<h3>About Astra OS</h3>' +
+        '<div class="about-card">' +
+          '<div class="about-logo">△</div>' +
+          '<div class="about-title">Astra OS</div>' +
+          '<div class="about-version">Version 1.0 (Quantum)</div>' +
+          '<div class="about-detail">Kernel: astra-kernel 6.2.0</div>' +
+          '<div class="about-detail">Build: 2026.05.22</div>' +
+          '<div class="about-detail">Architecture: ' + window.escapeHTML(hw.cpu.architecture) + '</div>' +
+          '<div class="about-detail">CPU: ' + window.escapeHTML(hw.cpu.model) + '</div>' +
+          '<div class="about-detail">GPU: ' + window.escapeHTML(hw.gpu.model) + '</div>' +
+          '<div class="about-detail">RAM: ' + window.escapeHTML(hw.ram.totalGB) + 'GB ' + window.escapeHTML(hw.ram.type) + '</div>' +
+          '<div class="about-detail">Display: ' + window.escapeHTML(hw.display.resolution) + ' @ ' + window.escapeHTML(hw.display.refreshRate) + '</div>' +
+          '<div class="about-credit">Designed and built by Divyanshu Sinha</div>' +
+        '</div>'
+      );
     }
   }
 
@@ -768,11 +793,11 @@ window.AstraApps.devicemgr = function(container, ui) {
         <div class="devmgr-tree">
           ${categories.map(cat => `
             <div class="devmgr-category">
-              <div class="devmgr-cat-header" data-key="${cat.key}">
-                <span class="devmgr-arrow">${Reflect.get(expanded, cat.key) ? '▼' : '▶'}</span>
-                <span>${cat.label}</span>
+              <div class="devmgr-cat-header" data-key="${window.escapeHTML(cat.key)}">
+                <span class="devmgr-arrow">${Reflect.get(expanded, window.sanitizeKey(cat.key)) ? '▼' : '▶'}</span>
+                <span>${window.escapeHTML(cat.label)}</span>
               </div>
-              ${expanded[cat.key] ? '<div class="devmgr-items">' + cat.items.map(i => '<div class="devmgr-item">' + i + '</div>').join('') + '</div>' : ''}
+              ${Reflect.get(expanded, window.sanitizeKey(cat.key)) ? '<div class="devmgr-items">' + cat.items.map(i => '<div class="devmgr-item">' + window.escapeHTML(i) + '</div>').join('') + '</div>' : ''}
             </div>
           `).join('')}
         </div>
@@ -781,9 +806,12 @@ window.AstraApps.devicemgr = function(container, ui) {
 
     container.querySelectorAll('.devmgr-cat-header').forEach(h => {
       h.addEventListener('click', () => {
-        const key = h.getAttribute('data-key');
-        expanded[key] = !expanded[key];
-        render();
+        const key = window.sanitizeKey(h.getAttribute('data-key'));
+        if (key) {
+          const currentVal = Reflect.get(expanded, key);
+          Reflect.set(expanded, key, !currentVal);
+          render();
+        }
       });
     });
   }

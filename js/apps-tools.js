@@ -29,7 +29,7 @@ window.AstraApps.browser = function(container, ui) {
         </div>
       </div>
     `,
-    'astra://settings': () => html`<div class="browser-page"><h2>⚙ Redirecting to Settings...</h2><p>Opening Settings app...</p></div>`,
+    'astra://settings': () => `<div class="browser-page"><h2>⚙ Redirecting to Settings...</h2><p>Opening Settings app...</p></div>`,
     'google.com': () => `
       <div class="browser-page browser-google">
         <div class="browser-page-header"><h1 style="font-size: 48px; letter-spacing: -1px"><span style="color:#4285f4">G</span><span style="color:#ea4335">o</span><span style="color:#fbbc05">o</span><span style="color:#4285f4">g</span><span style="color:#34a853">l</span><span style="color:#ea4335">e</span></h1></div>
@@ -160,11 +160,11 @@ window.AstraApps.browser = function(container, ui) {
     if (!vp) return;
     const host = currentUrl.replace(/^https?:\/\//, '').replace(/^astra:\/\//, 'astra://').split('/')[0];
     const key = currentUrl.startsWith('astra://') ? currentUrl : host;
-    const pageGenerator = pages[key];
+    const pageGenerator = Reflect.get(pages, window.sanitizeKey(key));
     if (pageGenerator) {
       window.renderSafeHTML(vp, pageGenerator());
     } else {
-      window.renderSafeHTML(vp, `
+      window.renderSafeHTML(vp, window.html`
         <div class="browser-page browser-404">
           <h2>🌐 ${host}</h2>
           <p>This site can't be reached — Simulated DNS did not resolve.</p>
@@ -254,11 +254,11 @@ window.AstraApps.appstore = function(container, ui) {
           installing = null;
           if (result.success) {
             ui.showToast('Package Installed', `${name} has been installed successfully.`, 'success');
-            ui.state.addNotification('success', 'App Store', `Installed ${name}`);
+            window.Astra.syscall('ui:addNotification', 'success', 'App Store', `Installed ${name}`);
             if (name === 'astroid') {
-              ui.addDockShortcut('astroid', 'Astro Defender Game', '🎮');
+              window.AstraUI.addDockShortcut('astroid', 'Astro Defender Game', '🎮');
             } else if (name === 'pulsewave') {
-              ui.addDockShortcut('pulsewave', 'PulseWave Ambient Player', '🎵');
+              window.AstraUI.addDockShortcut('pulsewave', 'PulseWave Ambient Player', '🎵');
             }
           }
           render();
@@ -300,7 +300,7 @@ window.AstraApps.notifcenter = function(container, ui) {
       filtered.forEach(n => {
         const icon = n.type === 'error' ? '🔴' : n.type === 'warning' ? '🟡' : n.type === 'success' ? '🟢' : '🔵';
         const unreadClass = n.read ? '' : 'unread';
-        notifListHTML += `
+        notifListHTML += window.html`
           <div class="notif-item ${unreadClass}">
             <div class="notif-icon">${icon}</div>
             <div class="notif-body">
@@ -313,7 +313,11 @@ window.AstraApps.notifcenter = function(container, ui) {
       });
     }
 
-    window.renderSafeHTML(container, `
+    const tabsHTML = ['all', 'agent', 'system', 'errors'].map(t =>
+      window.html`<button class="nc-tab ${(t === filter ? 'active' : '')}" data-filter="${t}">${(t.charAt(0).toUpperCase() + t.slice(1))}</button>`
+    ).join('');
+
+    window.renderSafeHTML(container, window.html`
       <div class="notifcenter-app">
         <div class="notifcenter-header">
           <h3>Notifications</h3>
@@ -323,12 +327,10 @@ window.AstraApps.notifcenter = function(container, ui) {
           </div>
         </div>
         <div class="notifcenter-tabs">
-          ${['all', 'agent', 'system', 'errors'].map(t =>
-            '<button class="nc-tab ' + (t === filter ? 'active' : '') + '" data-filter="' + t + '">' + (t.charAt(0).toUpperCase() + t.slice(1)) + '</button>'
-          ).join('')}
+          ${window.safeHTML(tabsHTML)}
         </div>
         <div class="notifcenter-list">
-          ${notifListHTML}
+          ${window.safeHTML(notifListHTML)}
         </div>
       </div>
     `);
@@ -336,8 +338,18 @@ window.AstraApps.notifcenter = function(container, ui) {
     container.querySelectorAll('.nc-tab').forEach(tab => {
       tab.addEventListener('click', () => { filter = tab.getAttribute('data-filter'); render(); });
     });
-    container.querySelector('#nc-markread')?.addEventListener('click', () => { ui.state.markAllNotificationsRead(); ui.updateNotifBadge(); render(); });
-    container.querySelector('#nc-clearall')?.addEventListener('click', () => { ui.state.notifications = []; ui.state.saveState(); ui.updateNotifBadge(); render(); });
+    container.querySelector('#nc-markread')?.addEventListener('click', () => {
+      Astra.syscall('ui:markNotificationsRead').then(() => {
+        ui.updateNotifBadge();
+        render();
+      });
+    });
+    container.querySelector('#nc-clearall')?.addEventListener('click', () => {
+      Astra.syscall('ui:clearNotifications').then(() => {
+        ui.updateNotifBadge();
+        render();
+      });
+    });
   }
 
   render();
@@ -355,7 +367,7 @@ window.AstraApps.dailybriefing = function(container, ui) {
     { text: "Talk is cheap. Show me the code.", author: "Linus Torvalds" },
     { text: "Quality is not an act, it is a habit.", author: "Aristotle" }
   ];
-  const quote = quotes[Math.floor(Math.random() * quotes.length)];
+  const quote = Reflect.get(quotes, Math.floor(Math.random() * quotes.length));
 
   function render() {
     const state = ui.state;
@@ -379,10 +391,10 @@ window.AstraApps.dailybriefing = function(container, ui) {
         tasks.forEach(t => {
           const isCompleted = t.status === 'completed';
           const checkbox = isCompleted ? '☑' : '☐';
-          tasksListHTML += `
+          tasksListHTML += window.html`
             <div class="db-task-item ${isCompleted ? 'completed' : ''}">
               <span class="db-task-check">${checkbox}</span>
-              <span class="db-task-title"><strong>${window.escapeHTML(t.title)}</strong> - ${window.escapeHTML(t.desc)}</span>
+              <span class="db-task-title"><strong>${t.title}</strong> - ${t.desc}</span>
               <span class="db-task-tag ${t.status}">${t.status}</span>
             </div>
           `;
@@ -391,29 +403,26 @@ window.AstraApps.dailybriefing = function(container, ui) {
 
       const pendingTask = tasks.find(t => t.status !== 'completed');
       const priorityText = pendingTask 
-        ? `Focus on completing: <strong>${window.escapeHTML(pendingTask.title)}</strong> (Assigned to ${window.escapeHTML(pendingTask.assigned || 'Agent')}).` 
+        ? window.html`Focus on completing: <strong>${pendingTask.title}</strong> (Assigned to ${pendingTask.assigned || 'Agent'}).` 
         : 'All tasks completed! Start planning the next iteration.';
 
-      contentHTML = `
+      contentHTML = window.html`
         <div class="dailybriefing-card">
           <h4>🌅 Welcome, Divyanshu</h4>
-          <p>Active Project: <strong>${window.escapeHTML(activeProject)}</strong> | Focus: <strong>${window.escapeHTML(focusMode.toUpperCase())}</strong></p>
+          <p>Active Project: <strong>${activeProject}</strong> | Focus: <strong>${focusMode.toUpperCase()}</strong></p>
           <div class="dailybriefing-quote">
-            "${window.escapeHTML(quote.text)}" — <em>${window.escapeHTML(quote.author)}</em>
+            "${quote.text}" — <em>${quote.author}</em>
           </div>
         </div>
         <div class="dailybriefing-card">
           <h4>📋 Today's Schedule & Tasks</h4>
           <div class="dailybriefing-tasks-list">
-            ${tasksListHTML}
+            ${window.safeHTML(tasksListHTML)}
           </div>
         </div>
         <div class="dailybriefing-card">
-          <h4>💡 Suggested Focus & Priorities</h4>
-          <p>${priorityText}</p>
-          <p style="font-size: 12px; color: var(--text-muted);">
-            Focus Tip: ${focusMode === 'deepwork' ? 'DND is active. Focus on coding blocks without interruption.' : 'Consider switching to Deep Work mode for distraction-free implementation.'}
-          </p>
+          <h4>🔥 Active Priority</h4>
+          <p>${window.safeHTML(priorityText)}</p>
         </div>
       `;
     } else {
@@ -423,10 +432,10 @@ window.AstraApps.dailybriefing = function(container, ui) {
         accomplishmentsHTML = '<p>No tasks marked completed today. Let\'s make progress tomorrow!</p>';
       } else {
         completedTasks.forEach(t => {
-          accomplishmentsHTML += `
+          accomplishmentsHTML += window.html`
             <div class="db-task-item completed">
               <span class="db-task-check">☑</span>
-              <span class="db-task-title"><strong>${window.escapeHTML(t.title)}</strong> - ${window.escapeHTML(t.desc)}</span>
+              <span class="db-task-title"><strong>${t.title}</strong> - ${t.desc}</span>
             </div>
           `;
         });
@@ -436,7 +445,7 @@ window.AstraApps.dailybriefing = function(container, ui) {
       let repoFilesHTML = '';
       if (window.AstraKernel) {
         const statusLines = window.AstraKernel.gitStatus(projectPath);
-        gitStatusHTML = statusLines.slice(0, 2).map(l => `<div>${window.escapeHTML(l)}</div>`).join('');
+        gitStatusHTML = statusLines.slice(0, 2).map(l => window.html`<div>${l}</div>`).join('');
         
         const repo = Reflect.get(state.gitRepos, projectPath);
         if (repo) {
@@ -452,25 +461,25 @@ window.AstraApps.dailybriefing = function(container, ui) {
             repoFilesHTML = '<div class="dailybriefing-empty">Working tree is clean. No files modified.</div>';
           } else {
             staged.forEach(f => {
-              repoFilesHTML += `
+              repoFilesHTML += window.html`
                 <div class="db-file-item">
-                  <span>${window.escapeHTML(f)}</span>
+                  <span>${f}</span>
                   <span class="db-file-status new">staged (new)</span>
                 </div>
               `;
             });
             modified.forEach(f => {
-              repoFilesHTML += `
+              repoFilesHTML += window.html`
                 <div class="db-file-item">
-                  <span>${window.escapeHTML(f)}</span>
+                  <span>${f}</span>
                   <span class="db-file-status modified">modified</span>
                 </div>
               `;
             });
             untracked.forEach(f => {
-              repoFilesHTML += `
+              repoFilesHTML += window.html`
                 <div class="db-file-item">
-                  <span>${window.escapeHTML(f)}</span>
+                  <span>${f}</span>
                   <span class="db-file-status untracked">untracked</span>
                 </div>
               `;
@@ -482,33 +491,33 @@ window.AstraApps.dailybriefing = function(container, ui) {
       }
 
       const nodes = state.memoryGraph?.nodes || [];
-      const recentMemories = nodes.slice(-3).map(n => `<li>${window.escapeHTML(n.label)}</li>`).join('');
-      const memoriesHTML = recentMemories ? `<ul>${recentMemories}</ul>` : '<p>No new memories recorded this session.</p>';
+      const recentMemories = nodes.slice(-3).map(n => window.html`<li>${n.label}</li>`).join('');
+      const memoriesHTML = recentMemories ? window.html`<ul>${window.safeHTML(recentMemories)}</ul>` : '<p>No new memories recorded this session.</p>';
 
-      contentHTML = `
+      contentHTML = window.html`
         <div class="dailybriefing-card">
           <h4>🏆 Today's Accomplishments</h4>
           <div class="dailybriefing-tasks-list">
-            ${accomplishmentsHTML}
+            ${window.safeHTML(accomplishmentsHTML)}
           </div>
         </div>
         <div class="dailybriefing-card">
           <h4>📦 Git Repository Status</h4>
           <div style="font-family: var(--font-mono); font-size: 11px; margin-bottom: 8px; color: var(--text-secondary);">
-            ${gitStatusHTML}
+            ${window.safeHTML(gitStatusHTML)}
           </div>
           <div class="dailybriefing-modified-list">
-            ${repoFilesHTML}
+            ${window.safeHTML(repoFilesHTML)}
           </div>
         </div>
         <div class="dailybriefing-card">
           <h4>🧠 Memories & Context Learned</h4>
-          ${memoriesHTML}
+          ${window.safeHTML(memoriesHTML)}
         </div>
       `;
     }
 
-    window.renderSafeHTML(container, `
+    window.renderSafeHTML(container, window.html`
       <div class="dailybriefing-app">
         <div class="dailybriefing-header">
           <h3>📅 Daily Briefing</h3>
@@ -519,7 +528,7 @@ window.AstraApps.dailybriefing = function(container, ui) {
           <button class="db-tab ${activeTab === 'evening' ? 'active' : ''}" id="db-tab-evening">Evening Wrap-up</button>
         </div>
         <div class="dailybriefing-content">
-          ${contentHTML}
+          ${window.safeHTML(contentHTML)}
         </div>
       </div>
     `);
@@ -610,7 +619,7 @@ window.AstraApps.dailybriefing = function(container, ui) {
     window.Astra.syscall('fs:write', filePath, md)
       .then(() => {
         ui.showToast('Briefing Exported', `Saved to ${filePath}`, 'success');
-        state.addNotification('success', 'Daily Briefing', `Exported briefing to ${filePath}`);
+        window.Astra.syscall('ui:addNotification', 'success', 'Daily Briefing', `Exported briefing to ${filePath}`);
       })
       .catch(err => {
         ui.showToast('Export Failed', err.message, 'error');
@@ -635,22 +644,22 @@ window.AstraApps.trust = function(container, ui) {
     
     let diffHTML = '';
     if (oldLines.length === 0) {
-      return newLines.map(line => `<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${window.escapeHTML(line)}</div>`).join('');
+      return newLines.map(line => window.html`<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${line}</div>`).join('');
     }
     
     let i = 0, j = 0;
     while (i < oldLines.length || j < newLines.length) {
       if (i < oldLines.length && j < newLines.length) {
-        if (oldLines[i] === newLines[j]) {
-          diffHTML += `<div style="color: var(--text-secondary); padding: 2px 4px; font-family: var(--font-mono); font-size: 11px;">&nbsp; ${window.escapeHTML(oldLines[i])}</div>`;
+        if (Reflect.get(oldLines, i) === Reflect.get(newLines, j)) {
+          diffHTML += window.html`<div style="color: var(--text-secondary); padding: 2px 4px; font-family: var(--font-mono); font-size: 11px;">&nbsp; ${Reflect.get(oldLines, i)}</div>`;
           i++;
           j++;
         } else {
           let foundMatch = false;
           for (let k = j + 1; k < Math.min(j + 8, newLines.length); k++) {
-            if (oldLines[i] === newLines[k]) {
+            if (Reflect.get(oldLines, i) === Reflect.get(newLines, k)) {
               for (let addIdx = j; addIdx < k; addIdx++) {
-                diffHTML += `<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${window.escapeHTML(newLines[addIdx])}</div>`;
+                diffHTML += window.html`<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${Reflect.get(newLines, addIdx)}</div>`;
               }
               j = k;
               foundMatch = true;
@@ -659,9 +668,9 @@ window.AstraApps.trust = function(container, ui) {
           }
           if (!foundMatch) {
             for (let k = i + 1; k < Math.min(i + 8, oldLines.length); k++) {
-              if (oldLines[k] === newLines[j]) {
+              if (Reflect.get(oldLines, k) === Reflect.get(newLines, j)) {
                 for (let delIdx = i; delIdx < k; delIdx++) {
-                  diffHTML += `<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${window.escapeHTML(oldLines[delIdx])}</div>`;
+                  diffHTML += window.html`<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${Reflect.get(oldLines, delIdx)}</div>`;
                 }
                 i = k;
                 foundMatch = true;
@@ -670,17 +679,17 @@ window.AstraApps.trust = function(container, ui) {
             }
           }
           if (!foundMatch) {
-            diffHTML += `<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${window.escapeHTML(oldLines[i])}</div>`;
-            diffHTML += `<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${window.escapeHTML(newLines[j])}</div>`;
+            diffHTML += window.html`<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${Reflect.get(oldLines, i)}</div>`;
+            diffHTML += window.html`<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${Reflect.get(newLines, j)}</div>`;
             i++;
             j++;
           }
         }
       } else if (i < oldLines.length) {
-        diffHTML += `<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${window.escapeHTML(oldLines[i])}</div>`;
+        diffHTML += window.html`<div style="color: #ef4444; background: rgba(239,68,68,0.05); padding: 2px 4px; text-decoration: line-through; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">- ${Reflect.get(oldLines, i)}</div>`;
         i++;
       } else if (j < newLines.length) {
-        diffHTML += `<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${window.escapeHTML(newLines[j])}</div>`;
+        diffHTML += window.html`<div style="color: #34d399; background: rgba(52,211,153,0.05); padding: 2px 4px; border-radius: 2px; font-family: var(--font-mono); font-size: 11px;">+ ${Reflect.get(newLines, j)}</div>`;
         j++;
       }
     }
@@ -729,7 +738,7 @@ window.AstraApps.trust = function(container, ui) {
     let activeTabContent = '';
     
     if (activeTab === 'policies') {
-      activeTabContent = `
+      activeTabContent = window.html`
         <div class="trust-grid">
           <div class="trust-panel">
             <h4>Agent Autonomy Policies</h4>
@@ -803,37 +812,40 @@ window.AstraApps.trust = function(container, ui) {
         const isAgent = appName.toLowerCase().includes('agent') || appName === 'AstraAgent';
         const badgeColor = isAgent ? 'var(--color-amber)' : 'var(--color-primary)';
         
-        manifestsHTML += `
+        const permsHTML = perms.length === 0 ? '<span style="color: var(--text-muted); font-size: 11px; font-style: italic;">None</span>' : perms.map(p => window.html`<span style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 1px 5px; font-family: var(--font-mono); font-size: 10px; color: var(--text-primary);">${p}</span>`).join('');
+        const sandboxHTML = sandbox.length === 0 ? '<span style="color: var(--text-muted); font-size: 11px; font-style: italic;">None</span>' : sandbox.map(s => window.html`<span style="background: rgba(6,182,212,0.04); border: 1px solid rgba(6,182,212,0.15); border-radius: 4px; padding: 1px 5px; font-family: var(--font-mono); font-size: 10px; color: #67e8f9;">${s}</span>`).join('');
+
+        manifestsHTML += window.html`
           <div class="trust-panel" style="margin-bottom: 12px; gap: 8px; background: var(--bg-glass-light); border: 1px solid var(--border-glass);">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 6px; margin-bottom: 4px;">
-              <span style="font-weight: 600; font-size: 13px; color: ${badgeColor}; font-family: var(--font-mono);">${window.escapeHTML(appName)}</span>
+              <span style="font-weight: 600; font-size: 13px; color: ${badgeColor}; font-family: var(--font-mono);">${appName}</span>
               <span style="font-size: 9px; padding: 2px 6px; border-radius: 10px; background: ${isAgent ? 'rgba(245,158,11,0.1)' : 'rgba(168,85,247,0.1)'}; color: ${badgeColor}; border: 1px solid ${isAgent ? 'rgba(245,158,11,0.2)' : 'rgba(168,85,247,0.2)'}; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">${isAgent ? 'Agent' : 'System App'}</span>
             </div>
             <div style="display: flex; flex-direction: column; gap: 6px;">
               <div>
                 <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Permissions:</span>
                 <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">
-                  ${perms.length === 0 ? '<span style="color: var(--text-muted); font-size: 11px; font-style: italic;">None</span>' : perms.map(p => `<span style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 1px 5px; font-family: var(--font-mono); font-size: 10px; color: var(--text-primary);">${window.escapeHTML(p)}</span>`).join('')}
+                  ${window.safeHTML(permsHTML)}
                 </div>
               </div>
               <div>
                 <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">VFS Sandbox Paths:</span>
                 <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px;">
-                  ${sandbox.length === 0 ? '<span style="color: var(--text-muted); font-size: 11px; font-style: italic;">None</span>' : sandbox.map(s => `<span style="background: rgba(6,182,212,0.04); border: 1px solid rgba(6,182,212,0.15); border-radius: 4px; padding: 1px 5px; font-family: var(--font-mono); font-size: 10px; color: #67e8f9;">${window.escapeHTML(s)}</span>`).join('')}
+                  ${window.safeHTML(sandboxHTML)}
                 </div>
               </div>
             </div>
           </div>
         `;
       });
-      activeTabContent = `
+      activeTabContent = window.html`
         <div class="trust-panel" style="flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; gap: 10px;">
           <h4>Application & Agent Security Manifests</h4>
           <p style="font-size: 11.5px; color: var(--text-secondary); margin: 0; line-height: 1.4;">
             Every utility and autonomous agent declared in the registry runs under a manifest-based security policy, constraining its allowed syscall interfaces and sandboxed virtual filesystem scopes.
           </p>
           <div style="flex-grow: 1; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 8px;">
-            ${manifestsHTML}
+            ${window.safeHTML(manifestsHTML)}
           </div>
         </div>
       `;
@@ -846,6 +858,8 @@ window.AstraApps.trust = function(container, ui) {
         queue.forEach(appr => {
           const isDestructive = appr.callName.includes('delete') || appr.callName.includes('kill');
           const panelStyle = isDestructive ? 'border-color: var(--color-red); background: rgba(239,68,68,0.02);' : '';
+          const workflowId = appr.metadata?.workflowId;
+          const linkedWorkflow = workflowId ? (state.workflows || []).find(wf => wf.id === workflowId) : null;
           
           let diffHTML = '';
           if (appr.callName === 'fs:write') {
@@ -856,19 +870,28 @@ window.AstraApps.trust = function(container, ui) {
             diffHTML = computeDiff(oldText, newText);
           }
 
-          approvalsListHTML += `
-            <div class="db-file-item" style="flex-direction: column; align-items: stretch; gap: 8px; margin-bottom: 8px; background: var(--bg-glass-light); border: 1px solid var(--border-glass); ${panelStyle}">
+          approvalsListHTML += window.html`
+            <div class="db-file-item" style="flex-direction: column; align-items: stretch; gap: 8px; margin-bottom: 8px; background: var(--bg-glass-light); border: 1px solid var(--border-glass); ${window.safeHTML(panelStyle)}">
               <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span><strong>${window.escapeHTML(appr.callerId)}</strong> requested <code>${window.escapeHTML(appr.callName)}</code></span>
+                <span><strong>${appr.callerId}</strong> requested <code>${appr.callName}</code></span>
                 <span style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">${new Date(appr.timestamp).toLocaleTimeString()}</span>
               </div>
-              <div style="font-size: 12px; color: var(--text-secondary);">Target: <code>${window.escapeHTML(String(appr.args[0]))}</code></div>
-              ${appr.callName === 'fs:write' ? `
+              <div style="font-size: 12px; color: var(--text-secondary);">Target: <code>${String(appr.args[0])}</code></div>
+              ${window.safeHTML(appr.details ? window.html`<div style="font-size: 11px; color: var(--text-secondary);">Reason: ${appr.details}</div>` : '')}
+              ${window.safeHTML(appr.metadata ? window.html`
+                <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; font-size: 10px; color: var(--text-muted);">
+                  <div><strong>Workflow:</strong> ${linkedWorkflow ? linkedWorkflow.goal : (workflowId || 'n/a')}</div>
+                  <div><strong>Source:</strong> ${appr.metadata.source || appr.callerId}</div>
+                  <div><strong>PID:</strong> ${appr.metadata.pid || 'n/a'}</div>
+                  <div><strong>User:</strong> ${appr.metadata.user || 'n/a'} (${appr.metadata.role || 'n/a'})</div>
+                </div>
+              ` : '')}
+              ${window.safeHTML(appr.callName === 'fs:write' ? window.html`
                 <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin: 6px 0 2px 0;">Proposed Code Patch Diff:</div>
                 <div style="font-family: var(--font-mono); font-size:11px; background: rgba(0,0,0,0.3); padding: 8px; border-radius:4px; max-height:160px; overflow-y:auto; margin:4px 0; border: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 2px; text-align: left;">
-                  ${diffHTML}
+                  ${window.safeHTML(diffHTML)}
                 </div>
-              ` : ''}
+              ` : '')}
               <div style="display: flex; gap: 8px; margin-top: 4px;">
                 <button class="btn btn-sm btn-approve" data-id="${appr.id}" style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">✓ Approve</button>
                 <button class="btn btn-sm btn-deny" data-id="${appr.id}" style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">✕ Deny</button>
@@ -877,11 +900,11 @@ window.AstraApps.trust = function(container, ui) {
           `;
         });
       }
-      activeTabContent = `
+      activeTabContent = window.html`
         <div class="trust-panel">
           <h4>Pending Approvals Inbox</h4>
           <div style="display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; padding-right: 4px;">
-            ${approvalsListHTML}
+            ${window.safeHTML(approvalsListHTML)}
           </div>
         </div>
       `;
@@ -895,21 +918,21 @@ window.AstraApps.trust = function(container, ui) {
         rollbackRowsHTML = '<div class="dailybriefing-empty">No files modified in the current session.</div>';
       } else {
         modifiedPaths.forEach(path => {
-          rollbackRowsHTML += `
+          rollbackRowsHTML += window.html`
             <div class="db-file-item">
-              <span style="font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow:1; max-width: 180px;">${window.escapeHTML(path)}</span>
-              <button class="btn btn-secondary btn-sm trust-rollback-btn" data-path="${window.escapeHTML(path)}" style="border-color: var(--color-amber); color: var(--color-amber); background: rgba(245,158,11,0.05); padding: 2px 6px; font-size: 11px;">
+              <span style="font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-grow:1; max-width: 180px;">${path}</span>
+              <button class="btn btn-secondary btn-sm trust-rollback-btn" data-path="${path}" style="border-color: var(--color-amber); color: var(--color-amber); background: rgba(245,158,11,0.05); padding: 2px 6px; font-size: 11px;">
                 ↩ Rollback
               </button>
             </div>
           `;
         });
       }
-      activeTabContent = `
+      activeTabContent = window.html`
         <div class="trust-panel">
           <h4>Active File Rollback Center</h4>
           <div class="dailybriefing-tasks-list" style="max-height: 250px; overflow-y: auto;">
-            ${rollbackRowsHTML}
+            ${window.safeHTML(rollbackRowsHTML)}
           </div>
         </div>
       `;
@@ -941,25 +964,25 @@ window.AstraApps.trust = function(container, ui) {
             }
           }
           
-          journalRowsHTML += `
-            <tr style="${rowStyle}">
+          journalRowsHTML += window.html`
+            <tr style="${window.safeHTML(rowStyle)}">
               <td style="font-family: var(--font-mono); font-size: 11px; white-space: nowrap;">${new Date(log.timestamp).toLocaleTimeString()}</td>
-              <td><strong>${window.escapeHTML(log.source)}</strong></td>
-              <td><span style="font-family: var(--font-mono); font-size:11px;">${window.escapeHTML(log.type)}</span></td>
-              <td><span style="font-weight:bold; font-size:10px;">${window.escapeHTML(log.level || 'INFO')}</span></td>
-              <td style="font-size:11.5px; overflow:hidden; text-overflow:ellipsis; max-width: 250px;" title="${window.escapeHTML(JSON.stringify(log.detail))}">
-                ${window.escapeHTML(detailStr)}
+              <td><strong>${log.source}</strong></td>
+              <td><span style="font-family: var(--font-mono); font-size:11px;">${log.type}</span></td>
+              <td><span style="font-weight:bold; font-size:10px;">${log.level || 'INFO'}</span></td>
+              <td style="font-size:11.5px; overflow:hidden; text-overflow:ellipsis; max-width: 250px;" title="${JSON.stringify(log.detail)}">
+                ${detailStr}
               </td>
             </tr>
           `;
         });
       }
 
-      activeTabContent = `
+      activeTabContent = window.html`
         <div class="trust-panel" style="overflow-x: auto;">
           <h4>System Journal Auditor</h4>
           <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
-            <input type="text" class="explorer-search" id="journal-search" placeholder="Search logs..." style="width: 180px; margin-left: 0;" value="${window.escapeHTML(searchQuery)}">
+            <input type="text" class="explorer-search" id="journal-search" placeholder="Search logs..." style="width: 180px; margin-left: 0;" value="${searchQuery}">
             <select class="trust-policy-select" id="journal-filter-type">
               <option value="all" ${filterType === 'all' ? 'selected' : ''}>All Subsystems</option>
               <option value="kernel" ${filterType === 'kernel' ? 'selected' : ''}>Kernel</option>
@@ -988,7 +1011,7 @@ window.AstraApps.trust = function(container, ui) {
                 </tr>
               </thead>
               <tbody>
-                ${journalRowsHTML}
+                ${window.safeHTML(journalRowsHTML)}
               </tbody>
             </table>
           </div>
@@ -996,7 +1019,7 @@ window.AstraApps.trust = function(container, ui) {
       `;
     }
 
-    window.renderSafeHTML(container, `
+    window.renderSafeHTML(container, window.html`
       <div class="trust-app">
         <div class="trust-header">
           <h3>🛡️ Trust & Safety Dashboard</h3>
@@ -1014,7 +1037,7 @@ window.AstraApps.trust = function(container, ui) {
         </div>
         
         <div class="trust-content">
-          ${activeTabContent}
+          ${window.safeHTML(activeTabContent)}
         </div>
       </div>
     `);
@@ -1033,18 +1056,16 @@ window.AstraApps.trust = function(container, ui) {
         select.addEventListener('change', () => {
           if (select.id === 'policy-safemode') {
             const isSafe = select.value === 'true';
-            if (!state.registry.security) state.registry.security = {};
-            state.registry.security.safeMode = isSafe;
-            state.saveState();
-            ui.showToast('Safe Mode Updated', `Safe Mode is now ${isSafe ? 'ENABLED' : 'DISABLED'}.`, isSafe ? 'warning' : 'success');
-            render();
+            Astra.syscall('ui:setSafeMode', isSafe).then(() => {
+              ui.showToast('Safe Mode Updated', `Safe Mode is now ${isSafe ? 'ENABLED' : 'DISABLED'}.`, isSafe ? 'warning' : 'success');
+              render();
+            });
             return;
           }
           const policyKey = select.id.replace('policy-', '') + 'Policy';
-          if (!state.registry.safety) state.registry.safety = {};
-          state.registry.safety[policyKey] = select.value;
-          state.saveState();
-          ui.showToast('Policy Updated', `Set ${select.id.replace('policy-', '')} access to ${select.value}.`, 'success');
+          Astra.syscall('ui:setSafetyPolicy', policyKey, select.value).then(() => {
+            ui.showToast('Policy Updated', `Set ${select.id.replace('policy-', '')} access to ${select.value}.`, 'success');
+          });
         });
       });
 
@@ -1054,10 +1075,9 @@ window.AstraApps.trust = function(container, ui) {
           container.querySelector('#threshold-val strong').textContent = `${e.target.value}%`;
         });
         slider.addEventListener('change', (e) => {
-          if (!state.registry.safety) state.registry.safety = {};
-          state.registry.safety.confidenceThreshold = parseInt(e.target.value);
-          state.saveState();
-          ui.showToast('Escalation Slider', `Confidence threshold updated to ${e.target.value}%.`, 'info');
+          Astra.syscall('ui:setConfidenceThreshold', parseInt(e.target.value)).then(() => {
+            ui.showToast('Escalation Slider', `Confidence threshold updated to ${e.target.value}%.`, 'info');
+          });
         });
       }
     }
@@ -1067,18 +1087,48 @@ window.AstraApps.trust = function(container, ui) {
       container.querySelectorAll('.btn-approve').forEach(btn => {
         btn.addEventListener('click', () => {
           const id = btn.getAttribute('data-id');
-          state.resolveApprovalRequest(id, 'approved');
-          ui.showToast('Action Approved', 'The pending syscall was approved and executed.', 'success');
-          render();
+          const approvalRequest = (state.approvalsQueue || []).find(appr => appr.id === id);
+          const workflowId = approvalRequest?.metadata?.workflowId;
+          const actor = state.currentSession.currentUser || 'User';
+          Astra.syscall('ui:resolveApproval', id, 'approved').then(() => {
+            if (workflowId) {
+              Astra.syscall('workflow:recordApproval', workflowId, {
+                actor,
+                decision: 'approved',
+                note: `Approved syscall ${approvalRequest.callName} from Trust inbox`
+              }).finally(() => {
+                ui.showToast('Action Approved', 'The pending syscall was approved and executed.', 'success');
+                render();
+              });
+              return;
+            }
+            ui.showToast('Action Approved', 'The pending syscall was approved and executed.', 'success');
+            render();
+          });
         });
       });
 
       container.querySelectorAll('.btn-deny').forEach(btn => {
         btn.addEventListener('click', () => {
           const id = btn.getAttribute('data-id');
-          state.resolveApprovalRequest(id, 'denied');
-          ui.showToast('Action Denied', 'The pending syscall was denied.', 'error');
-          render();
+          const approvalRequest = (state.approvalsQueue || []).find(appr => appr.id === id);
+          const workflowId = approvalRequest?.metadata?.workflowId;
+          const actor = state.currentSession.currentUser || 'User';
+          Astra.syscall('ui:resolveApproval', id, 'denied').then(() => {
+            if (workflowId) {
+              Astra.syscall('workflow:recordApproval', workflowId, {
+                actor,
+                decision: 'denied',
+                note: `Denied syscall ${approvalRequest.callName} from Trust inbox`
+              }).finally(() => {
+                ui.showToast('Action Denied', 'The pending syscall was denied.', 'error');
+                render();
+              });
+              return;
+            }
+            ui.showToast('Action Denied', 'The pending syscall was denied.', 'error');
+            render();
+          });
         });
       });
     }
@@ -1114,7 +1164,7 @@ window.AstraApps.trust = function(container, ui) {
               }
 
               ui.showToast('File Rolled Back', `Reverted modifications in ${path.split('/').pop()}`, 'success');
-              state.addNotification('success', 'Security Rollback', `Rolled back changes in ${path}`);
+              window.Astra.syscall('ui:addNotification', 'success', 'Security Rollback', `Rolled back changes in ${path}`);
               render();
               if (window.refreshExplorerGrid) window.refreshExplorerGrid();
             } catch (err) {
@@ -1227,7 +1277,7 @@ window.AstraApps.timeline = function(container, ui) {
     const auditLogs = state.auditLogs || [];
     
     const pulseValues = [30, 45, 60, 25, 80, 95, 75, 40, 65, 85, 90, 50, 70, 94];
-    const pulseBarsHTML = pulseValues.map(v => `
+    const pulseBarsHTML = pulseValues.map(v => window.html`
       <div class="work-pulse-bar" style="height: ${v}%" title="Work Pulse Intensity: ${v}%"></div>
     `).join('');
 
@@ -1247,23 +1297,23 @@ window.AstraApps.timeline = function(container, ui) {
           else if (log.agent.includes('Memory')) emoji = '🧠';
           else if (log.agent.includes('Safety')) emoji = '🛡️';
           
-          timelineEventsHTML += `
+          timelineEventsHTML += window.html`
             <div class="timeline-event">
               <span class="timeline-event-time">[${log.timestamp}]</span>
               <div class="timeline-event-body">
-                <strong>${emoji} ${window.escapeHTML(log.agent)}</strong>: ${window.escapeHTML(log.action)}
+                <strong>${emoji} ${log.agent}</strong>: ${log.action}
               </div>
             </div>
           `;
         });
       }
 
-      tabContentHTML = `
+      tabContentHTML = window.html`
         <div class="timeline-grid">
           <div class="timeline-panel">
             <h4>Cognitive Activity Stream</h4>
             <div class="timeline-scroll" style="max-height: 320px; overflow-y: auto; padding-top: 10px;">
-              ${timelineEventsHTML}
+              ${window.safeHTML(timelineEventsHTML)}
             </div>
           </div>
           
@@ -1271,7 +1321,7 @@ window.AstraApps.timeline = function(container, ui) {
             <h4>Work Pulse Momentum</h4>
             <p>Calculated velocity of active files edited, terminal builds, and agent operations.</p>
             <div class="work-pulse-chart">
-              ${pulseBarsHTML}
+              ${window.safeHTML(pulseBarsHTML)}
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
               <span>10:00 AM</span>
@@ -1288,22 +1338,22 @@ window.AstraApps.timeline = function(container, ui) {
     } else if (activeTimelineTab === 'capsules') {
       let capsuleCardsHTML = '';
       capsules.forEach(capsule => {
-        capsuleCardsHTML += `
-          <div class="capsule-card" data-capsule-id="${window.escapeHTML(capsule.id)}">
-            <div class="capsule-name">🎒 ${window.escapeHTML(capsule.name)}</div>
-            <div class="capsule-desc">${window.escapeHTML(capsule.description)}</div>
+        capsuleCardsHTML += window.html`
+          <div class="capsule-card" data-capsule-id="${capsule.id}">
+            <div class="capsule-name">🎒 ${capsule.name}</div>
+            <div class="capsule-desc">${capsule.description}</div>
             <div class="capsule-meta">Apps: ${capsule.openApps.join(', ')} | Focus: ${capsule.focusMode.toUpperCase()}</div>
           </div>
         `;
       });
 
-      tabContentHTML = `
+      tabContentHTML = window.html`
         <div class="timeline-grid" style="grid-template-columns: 1.2fr 1fr;">
           <div class="timeline-panel">
             <h4>Saved AI Session Capsules</h4>
             <p>Restore workspace capsules to instantly reconstruct active tabs, file selections, and focus settings.</p>
             <div class="capsule-grid" style="max-height: 300px; overflow-y: auto;">
-              ${capsuleCardsHTML}
+              ${window.safeHTML(capsuleCardsHTML)}
             </div>
           </div>
           
@@ -1350,7 +1400,7 @@ window.AstraApps.timeline = function(container, ui) {
       `;
     }
 
-    window.renderSafeHTML(container, `
+    window.renderSafeHTML(container, window.html`
       <div class="timeline-app">
         <div class="timeline-header">
           <h3>⏳ Cognitive Timeline & Capsules</h3>
@@ -1362,7 +1412,7 @@ window.AstraApps.timeline = function(container, ui) {
         </div>
         
         <div class="timeline-content">
-          ${tabContentHTML}
+          ${window.safeHTML(tabContentHTML)}
         </div>
       </div>
     `);
@@ -1386,6 +1436,7 @@ window.AstraApps.timeline = function(container, ui) {
       });
       const focusMode = state.registry.system.focusMode || 'coding';
       const activeFile = document.getElementById('context-file')?.textContent || '';
+      const fsSnapshot = JSON.parse(JSON.stringify(state.fs));
       
       const newCapsule = {
         id: 'capsule-' + Date.now(),
@@ -1393,16 +1444,16 @@ window.AstraApps.timeline = function(container, ui) {
         focusMode: focusMode,
         activeFile: activeFile,
         openApps: openApps,
-        description: `User snapped state containing ${openApps.length} active apps.`
+        fsSnapshot: fsSnapshot,
+        description: `User snapped state containing ${openApps.length} active apps and VFS clone.`
       };
       
-      if (!state.registry.system.capsules) state.registry.system.capsules = [];
-      state.registry.system.capsules.push(newCapsule);
-      state.saveState();
-      
-      ui.showToast('Capsule Saved', `Session capsule "${name}" captured.`, 'success');
-      state.addNotification('success', 'Timeline & Capsules', `Saved session capsule: ${name}`);
-      render();
+      Astra.syscall('ui:saveCapsule', newCapsule).then(() => {
+        Astra.syscall('ui:addNotification', 'success', 'Timeline & Capsules', `Saved session capsule: ${name}`).then(() => {
+          ui.showToast('Capsule Saved', `Session capsule "${name}" captured.`, 'success');
+          render();
+        });
+      });
     });
 
     container.querySelectorAll('.capsule-card').forEach(card => {
@@ -1418,33 +1469,38 @@ window.AstraApps.timeline = function(container, ui) {
 
   function restoreCapsuleState(capsule) {
     const state = ui.state;
-    Object.keys(state.processes).forEach(appId => {
-      ui.closeApp(appId);
+    Astra.syscall('ui:restoreCapsule', capsule).then(() => {
+      if (window.refreshExplorerGrid) window.refreshExplorerGrid();
+      
+      Object.keys(state.processes).forEach(appId => {
+        ui.closeApp(appId);
+      });
+      
+      ui.setFocusMode(capsule.focusMode);
+      
+      capsule.openApps.forEach(appId => {
+        ui.openApp(appId);
+      });
+      
+      if (capsule.activeFile) {
+        ui.openApp('editor');
+        setTimeout(() => {
+          if (window.editorOpenFile) window.editorOpenFile(capsule.activeFile);
+        }, 300);
+      }
+      
+      ui.showToast('Capsule Restored', `Restored capsule "${capsule.name}"`, 'success');
+      Astra.syscall('ui:addNotification', 'success', 'Capsule Engine', `Successfully restored work capsule: ${capsule.name}`).then(() => {
+        render();
+      });
     });
-    
-    ui.setFocusMode(capsule.focusMode);
-    
-    capsule.openApps.forEach(appId => {
-      ui.openApp(appId);
-    });
-    
-    if (capsule.activeFile) {
-      ui.openApp('editor');
-      setTimeout(() => {
-        if (window.editorOpenFile) window.editorOpenFile(capsule.activeFile);
-      }, 300);
-    }
-    
-    ui.showToast('Capsule Restored', `Restored capsule "${capsule.name}"`, 'success');
-    state.addNotification('success', 'Capsule Engine', `Successfully restored work capsule: ${capsule.name}`);
-    render();
   }
 
   render();
 };
 
 window.AstraApps.astroid = function(container, ui) {
-  window.renderSafeHTML(container, html`
+  window.renderSafeHTML(container, `
     <div class="astroid-app">
       <div class="astroid-header">
         <div class="astroid-stat">Score: <span id="astroid-score">0</span></div>
@@ -1862,7 +1918,7 @@ window.AstraApps.astroid = function(container, ui) {
 };
 
 window.AstraApps.pulsewave = function(container, ui) {
-  window.renderSafeHTML(container, html`
+  window.renderSafeHTML(container, `
     <div class="pulsewave-app">
       <div class="pulsewave-grid" style="display: grid; grid-template-columns: 240px 1fr; gap: 12px; height: 100%; min-height: 330px; box-sizing: border-box;">
         
@@ -2397,4 +2453,3 @@ window.AstraApps.pulsewave = function(container, ui) {
   renderKeyboard();
   updateMode();
 };
-

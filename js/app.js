@@ -19,6 +19,7 @@ function bootOS() {
   window.AstraKernel = new Kernel(state);
   const ui = new UIController(state);
   ui.init();
+  ui.initSafeModeBanner();
   const orchestrator = new AgentOrchestrator(state, ui);
   window.AstraAgentOrchestrator = orchestrator;
   
@@ -37,13 +38,13 @@ function bootOS() {
     ui.updateNotifBadge?.();
     window.refreshTasksBoard?.();
     window.refreshWorkflowApp?.();
-    state.addNotification('info', 'Workflow Engine', 'A new agent workflow has been created.');
+    window.Astra.syscall('ui:addNotification', 'info', 'Workflow Engine', 'A new agent workflow has been created.');
   });
   window.AstraBus.on('workflow.updated', () => {
     ui.updateNotifBadge?.();
     window.refreshTasksBoard?.();
     window.refreshWorkflowApp?.();
-    state.addNotification('info', 'Workflow Engine', 'An agent workflow was updated.');
+    window.Astra.syscall('ui:addNotification', 'info', 'Workflow Engine', 'An agent workflow was updated.');
   });
   window.AstraBus.on('fs.changed', () => {
     window.refreshExplorerGrid?.();
@@ -71,31 +72,36 @@ function bootOS() {
   window.refreshExplorerGrid = () => {
     const explorerBody = document.querySelector('.window[data-app="explorer"] .window-body');
     if (explorerBody && window.AstraApps.explorer) {
-      window.AstraApps.explorer(explorerBody, ui);
+      const context = window.AstraRuntime ? window.AstraRuntime.getContext('explorer') : ui;
+      window.AstraApps.explorer(explorerBody, context);
     }
   };
   window.drawMemoryGraphApp = () => {
     const memoryBody = document.querySelector('.window[data-app="memory"] .window-body');
     if (memoryBody && window.AstraApps.memory) {
-      window.AstraApps.memory(memoryBody, ui);
+      const context = window.AstraRuntime ? window.AstraRuntime.getContext('memory') : ui;
+      window.AstraApps.memory(memoryBody, context);
     }
   };
   window.refreshTasksBoard = () => {
     const tasksBody = document.querySelector('.window[data-app="tasks"] .window-body');
     if (tasksBody && window.AstraApps.tasks) {
-      window.AstraApps.tasks(tasksBody, ui);
+      const context = window.AstraRuntime ? window.AstraRuntime.getContext('tasks') : ui;
+      window.AstraApps.tasks(tasksBody, context);
     }
   };
   window.refreshWorkflowApp = () => {
     const workflowBody = document.querySelector('.window[data-app="workflow"] .window-body');
     if (workflowBody && window.AstraApps.workflow) {
-      window.AstraApps.workflow(workflowBody, ui);
+      const context = window.AstraRuntime ? window.AstraRuntime.getContext('workflow') : ui;
+      window.AstraApps.workflow(workflowBody, context);
     }
   };
   window.refreshDashboardLogs = () => {
     const dashboardBody = document.querySelector('.window[data-app="dashboard"] .window-body');
     if (dashboardBody && window.AstraApps.dashboard) {
-      window.AstraApps.dashboard(dashboardBody, ui);
+      const context = window.AstraRuntime ? window.AstraRuntime.getContext('dashboard') : ui;
+      window.AstraApps.dashboard(dashboardBody, context);
     }
   };
 
@@ -184,7 +190,7 @@ function bootOS() {
     }
   }
 
-  state.runIntegrityChecks();
+  state.withKernelWrite(() => state.runIntegrityChecks());
   refreshSidebarMemories();
 
   // ==========================================
@@ -201,7 +207,7 @@ function bootOS() {
       
       if (val.includes('reset') || val.includes('factory')) {
         if (confirm('Are you sure you want to factory reset Astra OS? This will clear all files and databases.')) {
-          state.resetAllState();
+          state.withKernelWrite(() => state.resetAllState());
           location.reload();
         }
       } else if (val.includes('afk')) {
@@ -264,6 +270,8 @@ function bootOS() {
         }
       }
       else if (command === 'ai-continue') triggerAgentWorkflow();
+      else if (command === 'ai-report') triggerAgentWorkflow('Create a system report');
+      else if (command === 'ai-audit') triggerAgentWorkflow('Audit this project and make a next-actions plan');
       else if (command === 'ai-summarize') triggerChatSearch('Summarize my active workspace');
       else if (command === 'ai-organize') triggerChatSearch('Organize Project Directory');
       else if (command === 'health-check') {
@@ -427,10 +435,10 @@ function bootOS() {
   function appendChatBubble(content, sender) {
     const bubble = document.createElement('div');
     bubble.className = `chat-bubble ${sender}`;
-    window.renderSafeHTML(bubble, `
-      <div class="bubble-content">${content}</div>
-      <div class="bubble-time">Just now</div>
-    `);
+    window.renderSafeHTML(bubble, 
+      '<div class="bubble-content">' + content + '</div>' +
+      '<div class="bubble-time">Just now</div>'
+    );
     chatMessages.appendChild(bubble);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
@@ -514,7 +522,7 @@ function bootOS() {
     // 4. "Prepare a summary of unresolved tasks" / "unresolved tasks"
     if (lower.includes('unresolved tasks') || lower.includes('pending tasks')) {
       const pendingCount = state.agentTasks.filter(t => t.status !== 'completed').length;
-      appendChatBubble(`I scanned your task board and found <strong>${pendingCount} unresolved tasks</strong> remaining. Opening the Tasks Board app.`, 'assistant');
+      appendChatBubble('I scanned your task board and found <strong>' + window.escapeHTML(pendingCount) + ' unresolved tasks</strong> remaining. Opening the Tasks Board app.', 'assistant');
       setTimeout(() => {
         ui.openApp('tasks');
       }, 500);
@@ -533,6 +541,20 @@ function bootOS() {
           if (window.editorOpenFile) window.editorOpenFile('/home/divyanshu/Documents/meeting_notes.txt');
         }, 300);
       }, 800);
+      return;
+    }
+
+    // 6. Create a system report
+    if (lower.includes('system report') || lower.includes('create a report') || lower.includes('report status')) {
+      appendChatBubble("I will compile system health details, active processes, and logs to draft a system performance report. You can review my plan in the Workflow Console.", 'assistant');
+      triggerAgentWorkflow('Create a system report');
+      return;
+    }
+
+    // 7. Audit this project
+    if (lower.includes('audit this project') || lower.includes('audit project') || lower.includes('project audit') || lower.trim() === 'audit') {
+      appendChatBubble("I will audit the Project Astra workspace structure, dependencies, and files to produce a next-actions plan. Check the Workflow Console for my plan.", 'assistant');
+      triggerAgentWorkflow('Audit this project and make a next-actions plan');
       return;
     }
 
@@ -596,7 +618,7 @@ function bootOS() {
     afkUndoBtn.addEventListener('click', async () => {
       const restored = await orchestrator.undoLastWorkflow();
       ui.showToast('Rollback Complete', `Reverted ${restored} files modified by agent.`, 'success');
-      state.addNotification('success', 'System Rollback', `Successfully reverted ${restored} files modified during AFK mode.`);
+      window.Astra.syscall('ui:addNotification', 'success', 'System Rollback', `Successfully reverted ${restored} files modified during AFK mode.`);
       afkUndoBtn.style.display = 'none';
       
       const diffContainer = document.getElementById('summary-diff-container');
@@ -608,9 +630,10 @@ function bootOS() {
 
   function toggleAFK(enable) {
     if (enable) {
-      state.systemVars.afkRunning = true;
-      state.systemVars.afkStartTime = Date.now();
-      state.saveState();
+      const now = Date.now();
+      window.Astra.syscall('ui:setSystemVar', 'afkRunning', true).then(() => {
+        window.Astra.syscall('ui:setSystemVar', 'afkStartTime', now);
+      });
       
       afkOverlay.classList.remove('hidden');
       document.body.classList.add('afk-active');
@@ -644,19 +667,18 @@ function bootOS() {
       }, 1000);
 
     } else {
-      state.systemVars.afkRunning = false;
-      const elapsedMs = Date.now() - state.systemVars.afkStartTime;
+      const elapsedMs = Date.now() - (state.systemVars.afkStartTime || Date.now());
       const minutes = Math.floor(elapsedMs / 60000);
       const seconds = Math.floor((elapsedMs % 60000) / 1000);
       const durationStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
       
-      state.saveState();
-      
-      afkOverlay.classList.add('hidden');
-      document.body.classList.remove('afk-active');
-      
-      // Show report dialog!
-      showAFKSummaryReport(durationStr);
+      window.Astra.syscall('ui:setSystemVar', 'afkRunning', false).then(() => {
+        afkOverlay.classList.add('hidden');
+        document.body.classList.remove('afk-active');
+        
+        // Show report dialog!
+        showAFKSummaryReport(durationStr);
+      });
     }
   }
 
@@ -700,10 +722,10 @@ function bootOS() {
       orchestrator.afkSummaryData.actionsList.forEach(item => {
         const li = document.createElement('li');
         li.className = 'summary-action-item';
-        window.renderSafeHTML(li, `
-          <span>${item.action}</span>
-          <span class="summary-action-time">${item.time}</span>
-        `);
+        window.renderSafeHTML(li, 
+          '<span>' + window.escapeHTML(item.action) + '</span>' +
+          '<span class="summary-action-time">' + window.escapeHTML(item.time) + '</span>'
+        );
         actionList.appendChild(li);
       });
     }
@@ -825,10 +847,11 @@ function bootOS() {
   if (voiceToggleBtn) {
     updateVoiceToggleButton();
     voiceToggleBtn.addEventListener('click', () => {
-      state.registry.ai.voiceEnabled = !state.registry.ai.voiceEnabled;
-      state.saveState();
-      updateVoiceToggleButton();
-      ui.showToast('Voice Settings', `Voice response speaking ${state.registry.ai.voiceEnabled ? 'enabled' : 'disabled'}.`, 'info');
+      const targetVal = !state.registry.ai.voiceEnabled;
+      window.Astra.syscall('ui:setRegistryVal', 'ai', 'voiceEnabled', targetVal).then(() => {
+        updateVoiceToggleButton();
+        ui.showToast('Voice Settings', `Voice response speaking ${targetVal ? 'enabled' : 'disabled'}.`, 'info');
+      });
     });
   }
 
@@ -836,14 +859,18 @@ function bootOS() {
   // 8. Workflow Initiators
   // ==========================================
   
-  function triggerAgentWorkflow() {
-    const textInput = 'Implement routes check and build project gateway.';
+  function triggerAgentWorkflow(goal) {
+    const textInput = goal || 'Implement routes check and build project gateway.';
     orchestrator.startWorkflow(textInput);
     
     // Automatically trigger app opens to show layout active
     setTimeout(() => ui.openApp('editor'), 400);
     setTimeout(() => ui.openApp('tasks'), 1000);
-    setTimeout(() => ui.openApp('terminal'), 3200);
+    if (textInput.includes('report') || textInput.includes('audit')) {
+      setTimeout(() => ui.openApp('workflow'), 2000);
+    } else {
+      setTimeout(() => ui.openApp('terminal'), 3200);
+    }
   }
 
   // Hook memory focus scraper into UI focus changes
@@ -852,8 +879,10 @@ function bootOS() {
     const nodeLabel = `App: ${appName.charAt(0).toUpperCase() + appName.slice(1)}`;
     const nodeId = `app-${appName}`;
     
-    state.addMemoryNode(nodeId, nodeLabel, 'application');
-    state.addMemoryLink('usr-divyanshu', nodeId, 'focused');
+    state.withKernelWrite(() => {
+      state.addMemoryNode(nodeId, nodeLabel, 'application');
+      state.addMemoryLink('usr-divyanshu', nodeId, 'focused');
+    });
     
     refreshSidebarMemories();
     window.drawMemoryGraphApp();

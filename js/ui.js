@@ -176,16 +176,24 @@ export class UIController {
     if (el) {
       el.style.removeProperty('display');
       el.classList.remove('hidden');
+      
+      const currentUser = this.state.currentSession.currentUser || 'divyanshu';
+      const userObj = this.state.users.find(u => u.username === currentUser);
+      const displayName = userObj ? userObj.displayName : currentUser;
+      const initial = displayName.charAt(0).toUpperCase();
+      
+      const avatarEl = el.querySelector('.lock-avatar');
+      const nameEl = el.querySelector('.lock-name');
+      if (avatarEl) avatarEl.textContent = initial;
+      if (nameEl) nameEl.textContent = displayName;
     }
-    this.state.currentSession.isLocked = true;
-    this.state.saveState();
+    Astra.syscall('ui:setSessionVar', 'isLocked', true);
   }
 
   hideLockScreen() {
     const el = document.getElementById('lock-screen');
     if (el) el.classList.add('hidden');
-    this.state.currentSession.isLocked = false;
-    this.state.saveState();
+    Astra.syscall('ui:setSessionVar', 'isLocked', false);
   }
 
   lockScreen() {
@@ -244,9 +252,9 @@ export class UIController {
   showContextMenu(x, y, items) {
     const menu = document.getElementById('context-menu');
     if (!menu) return;
-    window.renderSafeHTML(menu, items.map(item => {
-      if (item.divider) return '<div class="ctx-divider"></div>';
-      return html`<div class="ctx-item" data-idx="${items.indexOf(item)}">${escapeHTML(item.label)}</div>`;
+    window.renderSafeHTML(menu, items.map((item, idx) => {
+      if (item.divider) return '<div class="context-menu-separator"></div>';
+      return `<div class="context-menu-item" data-idx="${idx}">${window.escapeHTML(item.label)}</div>`;
     }).join(''));
     // Position
     menu.style.left = `${Math.min(x, window.innerWidth - 200)}px`;
@@ -254,7 +262,7 @@ export class UIController {
     menu.classList.remove('hidden');
     this.contextMenuVisible = true;
     // Events
-    menu.querySelectorAll('.ctx-item').forEach(el => {
+    menu.querySelectorAll('.context-menu-item').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const idx = parseInt(el.getAttribute('data-idx'));
@@ -299,11 +307,24 @@ export class UIController {
           const dockH = 60;
           const areaW = window.innerWidth;
           const areaH = window.innerHeight - menuH - dockH;
-          if (this.snapTarget === 'left') { proc.x = 0; proc.y = menuH; proc.w = areaW / 2; proc.h = areaH; }
-          else if (this.snapTarget === 'right') { proc.x = areaW / 2; proc.y = menuH; proc.w = areaW / 2; proc.h = areaH; }
-          else if (this.snapTarget === 'maximize') { proc.x = 0; proc.y = menuH; proc.w = areaW; proc.h = areaH; }
-          this.state.saveState();
-          this.applyWindowTransform(appId);
+          let patch = {};
+          if (this.snapTarget === 'left') { patch = { x: 0, y: menuH, w: areaW / 2, h: areaH }; }
+          else if (this.snapTarget === 'right') { patch = { x: areaW / 2, y: menuH, w: areaW / 2, h: areaH }; }
+          else if (this.snapTarget === 'maximize') {
+            patch = {
+              x: 0,
+              y: menuH,
+              w: areaW,
+              h: areaH,
+              preMaxX: this.dragState.origX,
+              preMaxY: this.dragState.origY,
+              preMaxW: proc.w,
+              preMaxH: proc.h
+            };
+          }
+          Astra.syscall('ui:setWindowState', appId, patch).then(() => {
+            this.applyWindowTransform(appId);
+          });
         }
       }
       [document.getElementById('snap-zone-left'), document.getElementById('snap-zone-right'), document.getElementById('snap-zone-top')].forEach(z => { if (z) z.classList.remove('active'); });
@@ -354,13 +375,12 @@ export class UIController {
         `).join('')}
       </div>
     `);
-    panel.querySelector('#notif-clear-all')?.addEventListener('click', () => {
-      this.state.notifications = [];
-      this.state.saveState();
+    panel.querySelector('#notif-clear-all')?.addEventListener('click', async () => {
+      await Astra.syscall('ui:clearNotifications');
       this.updateNotifBadge();
       this.renderNotifPanel();
     });
-    this.state.markAllNotificationsRead();
+    Astra.syscall('ui:markNotificationsRead');
     this.updateNotifBadge();
   }
 
@@ -541,6 +561,7 @@ export class UIController {
       const appId = win.getAttribute('data-app');
       const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
       if (!proc) return;
+      if (this.isMaximized(appId)) return;
 
       this.dragState = {
         appId,
@@ -558,16 +579,35 @@ export class UIController {
       if (!this.dragState) return;
       const dx = e.clientX - this.dragState.startX;
       const dy = e.clientY - this.dragState.startY;
-      const proc = Object.prototype.hasOwnProperty.call(this.state.processes, this.dragState.appId) ? Reflect.get(this.state.processes, this.dragState.appId) : null;
-      if (!proc) return;
-      proc.x = this.dragState.origX + dx;
-      proc.y = this.dragState.origY + dy;
-      this.applyWindowTransform(this.dragState.appId);
+      const win = document.querySelector(`.window[data-app="${window.escapeHTML(this.dragState.appId)}"]`);
+      if (win) {
+        let x = this.dragState.origX + dx;
+        let y = this.dragState.origY + dy;
+        const maxTop = window.innerHeight - 30;
+        y = Math.max(0, Math.min(maxTop, y));
+        const minLeft = 50 - win.offsetWidth;
+        const maxLeft = window.innerWidth - 50;
+        x = Math.max(minLeft, Math.min(maxLeft, x));
+        win.style.left = `${x}px`;
+        win.style.top = `${y}px`;
+      }
     });
 
-    document.addEventListener('mouseup', () => {
+    document.addEventListener('mouseup', (e) => {
       if (this.dragState) {
-        this.state.saveState();
+        const dx = e.clientX - this.dragState.startX;
+        const dy = e.clientY - this.dragState.startY;
+        let finalX = this.dragState.origX + dx;
+        let finalY = this.dragState.origY + dy;
+        const win = document.querySelector(`.window[data-app="${window.escapeHTML(this.dragState.appId)}"]`);
+        if (win) {
+          const maxTop = window.innerHeight - 30;
+          finalY = Math.max(0, Math.min(maxTop, finalY));
+          const minLeft = 50 - win.offsetWidth;
+          const maxLeft = window.innerWidth - 50;
+          finalX = Math.max(minLeft, Math.min(maxLeft, finalX));
+        }
+        Astra.syscall('ui:setWindowState', this.dragState.appId, { x: finalX, y: finalY });
         this.dragState = null;
       }
     });
@@ -590,12 +630,15 @@ export class UIController {
     const procs = this.state.processes;
     const allZ = Object.values(procs).map(p => p.zIndex || 0).filter(z => z > 0);
     const maxZ = allZ.length > 0 ? Math.max(...allZ) : 10;
-    if (Object.prototype.hasOwnProperty.call(procs, appId)) Reflect.get(procs, appId).zIndex = maxZ + 1;
-    this.state.activeWindow = appId;
+    
+    Astra.syscall('ui:setSystemVar', 'activeWindow', appId);
+    if (Object.prototype.hasOwnProperty.call(procs, appId)) {
+      Astra.syscall('ui:setWindowState', appId, { zIndex: maxZ + 1 });
+    }
 
     document.querySelectorAll('.window').forEach(win => {
       const id = win.getAttribute('data-app');
-      const z = procs[id]?.zIndex || 1;
+      const z = (id === appId) ? (maxZ + 1) : (procs[id]?.zIndex || 1);
       win.style.zIndex = z;
       win.classList.toggle('active', id === appId);
     });
@@ -603,14 +646,14 @@ export class UIController {
     // Update dock active indicators
     document.querySelectorAll('.dock-item').forEach(item => {
       const id = item.getAttribute('data-app');
-      item.classList.toggle('active', procs[id]?.open);
+      const isOpen = procs[id]?.open === true;
+      item.classList.toggle('active', isOpen);
+      item.classList.toggle('running', isOpen);
     });
 
     if (window.MemoryHook) {
       window.MemoryHook(appId);
     }
-
-    this.state.saveState();
   }
 
   createWindowDOM(appId) {
@@ -670,6 +713,10 @@ export class UIController {
       e.stopPropagation();
       this.maximizeApp(appId);
     });
+    win.querySelector('.window-header')?.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.control-dot')) return;
+      this.maximizeApp(appId);
+    });
     win.addEventListener('mousedown', () => this.focusWindow(appId));
 
     // Setup window resizing for this specific window
@@ -688,6 +735,7 @@ export class UIController {
 
       const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
       if (!proc) return;
+      if (this.isMaximized(appId)) return;
 
       const startW = proc.w;
       const startH = proc.h;
@@ -697,17 +745,20 @@ export class UIController {
       const onMouseMove = (moveEvent) => {
         const dx = moveEvent.clientX - startX;
         const dy = moveEvent.clientY - startY;
-
-        proc.w = Math.max(320, startW + dx);
-        proc.h = Math.max(200, startH + dy);
-
-        this.applyWindowTransform(appId);
+        const newW = Math.max(320, startW + dx);
+        const newH = Math.max(200, startH + dy);
+        win.style.width = `${newW}px`;
+        win.style.height = `${newH}px`;
       };
 
-      const onMouseUp = () => {
+      const onMouseUp = (upEvent) => {
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
-        this.state.saveState();
+        const dx = upEvent.clientX - startX;
+        const dy = upEvent.clientY - startY;
+        const finalW = Math.max(320, startW + dx);
+        const finalH = Math.max(200, startH + dy);
+        Astra.syscall('ui:setWindowState', appId, { w: finalW, h: finalH });
       };
 
       document.addEventListener('mousemove', onMouseMove);
@@ -733,16 +784,7 @@ export class UIController {
 
   openApp(appId) {
     let proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
-    if (!proc) {
-      proc = { open: false, minimized: false, x: 200, y: 150, w: 600, h: 420, zIndex: 25 };
-      Reflect.set(this.state.processes, window.sanitizeKey(appId), proc);
-    }
-    let win = document.querySelector(`.window[data-app="${window.escapeHTML(appId)}"]`);
-    if (!win) {
-      win = this.createWindowDOM(appId);
-    }
-
-    if (proc.open && !proc.minimized) {
+    if (proc && proc.open && !proc.minimized) {
       if (proc.workspace !== undefined && proc.workspace !== (this.state.systemVars.currentWorkspace || 0)) {
         this.switchWorkspace(proc.workspace);
       }
@@ -750,16 +792,34 @@ export class UIController {
       return;
     }
 
-    const isResuming = proc.open && proc.minimized;
+    const isResuming = proc && proc.open && proc.minimized;
+    const currentWorkspace = this.state.systemVars.currentWorkspace || 0;
+    const targetWorkspace = (proc && proc.workspace !== undefined) ? proc.workspace : currentWorkspace;
 
-    proc.open = true;
-    proc.minimized = false;
-    if (proc.workspace === undefined) {
-      proc.workspace = this.state.systemVars.currentWorkspace || 0;
+    // Use syscall to update the window state safely!
+    Astra.syscall('ui:setWindowState', appId, {
+      open: true,
+      minimized: false,
+      workspace: targetWorkspace
+    });
+
+    // Re-retrieve proc from the state
+    proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+
+    let win = document.querySelector(`.window[data-app="${window.escapeHTML(appId)}"]`);
+    if (!win) {
+      win = this.createWindowDOM(appId);
     }
+
     this.updateWorkspaceWindows();
 
     win.classList.remove('hidden');
+    if (isResuming) {
+      win.classList.add('restoring');
+      setTimeout(() => {
+        win.classList.remove('restoring');
+      }, 240);
+    }
     win.style.left = `${proc.x}px`;
     win.style.top = `${proc.y}px`;
     win.style.width = `${proc.w}px`;
@@ -776,12 +836,32 @@ export class UIController {
       const content = win.querySelector('.window-body');
       if (content && Reflect.get(window.AstraApps, window.sanitizeKey(appId))) {
         window.renderSafeHTML(content, '');
-        Reflect.get(window.AstraApps, window.sanitizeKey(appId))(content, this);
+        const context = window.AstraRuntime ? window.AstraRuntime.getContext(appId) : this;
+        Reflect.get(window.AstraApps, window.sanitizeKey(appId))(content, context);
       }
       this.triggerLifecycleHook(appId, 'launch');
     }
+  }
 
-    this.state.saveState();
+  shiftFocusAfterCloseOrMinimize(appId) {
+    if (this.state.activeWindow === appId) {
+      // Find all open, non-minimized apps on the current workspace
+      const currentWorkspace = this.state.systemVars.currentWorkspace || 0;
+      const openProcs = Object.keys(this.state.processes)
+        .filter(id => id !== appId)
+        .map(id => ({ id, ...this.state.processes[id] }))
+        .filter(p => p.open && !p.minimized && (p.workspace === undefined || p.workspace === currentWorkspace));
+        
+      if (openProcs.length > 0) {
+        // Sort by zIndex descending to find the top window
+        openProcs.sort((a, b) => (b.zIndex || 0) - (a.zIndex || 0));
+        this.focusWindow(openProcs[0].id);
+      } else {
+        // No other windows open, set activeWindow to null
+        Astra.syscall('ui:setSystemVar', 'activeWindow', null);
+        document.querySelectorAll('.window').forEach(win => win.classList.remove('active'));
+      }
+    }
   }
 
   closeApp(appId) {
@@ -799,8 +879,11 @@ export class UIController {
         window.renderSafeHTML(body, '');
       }
     }
-    proc.open = false;
-    proc.minimized = false;
+    
+    const wasActive = this.state.activeWindow === appId;
+    
+    // Syscall to set window state to closed
+    Astra.syscall('ui:setWindowState', appId, { open: false, minimized: false });
 
     this.clearAppTimers(appId);
 
@@ -811,20 +894,47 @@ export class UIController {
     }
 
     document.querySelectorAll('.dock-item').forEach(item => {
-      if (item.getAttribute('data-app') === appId) item.classList.remove('active');
+      if (item.getAttribute('data-app') === appId) {
+        item.classList.remove('active');
+        item.classList.remove('running');
+      }
     });
 
-    this.state.saveState();
+    if (wasActive) {
+      this.shiftFocusAfterCloseOrMinimize(appId);
+    }
   }
 
   minimizeApp(appId) {
     const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
     if (!proc) return;
+    const wasActive = this.state.activeWindow === appId;
     const win = document.querySelector(`.window[data-app="${window.escapeHTML(appId)}"]`);
-    if (win) win.classList.add('hidden');
-    proc.minimized = true;
-    this.triggerLifecycleHook(appId, 'suspend');
-    this.state.saveState();
+    const finishMinimize = () => {
+      Astra.syscall('ui:setWindowState', appId, { minimized: true });
+      this.triggerLifecycleHook(appId, 'suspend');
+      if (wasActive) {
+        this.shiftFocusAfterCloseOrMinimize(appId);
+      }
+    };
+    if (win) {
+      win.classList.add('minimizing');
+      setTimeout(() => {
+        win.classList.remove('minimizing');
+        win.classList.add('hidden');
+        finishMinimize();
+      }, 240);
+    } else {
+      finishMinimize();
+    }
+  }
+
+  isMaximized(appId) {
+    const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
+    if (!proc) return false;
+    const menuH = 36;
+    const dockH = 60;
+    return (proc.w >= window.innerWidth - 20 && proc.h >= window.innerHeight - menuH - dockH - 20);
   }
 
   maximizeApp(appId) {
@@ -832,20 +942,31 @@ export class UIController {
     if (!proc) return;
     const menuH = 36;
     const dockH = 60;
-    if (proc.w >= window.innerWidth - 20 && proc.h >= window.innerHeight - menuH - dockH - 20) {
+    let patch = {};
+    if (this.isMaximized(appId)) {
       // Restore
-      proc.x = 100 + Math.random() * 200;
-      proc.y = 60 + Math.random() * 100;
-      proc.w = 700;
-      proc.h = 480;
+      patch = {
+        x: proc.preMaxX !== undefined ? proc.preMaxX : (100 + Math.random() * 200),
+        y: proc.preMaxY !== undefined ? proc.preMaxY : (60 + Math.random() * 100),
+        w: proc.preMaxW !== undefined ? proc.preMaxW : 700,
+        h: proc.preMaxH !== undefined ? proc.preMaxH : 480
+      };
     } else {
-      proc.x = 0;
-      proc.y = menuH;
-      proc.w = window.innerWidth;
-      proc.h = window.innerHeight - menuH - dockH;
+      // Maximize
+      patch = {
+        x: 0,
+        y: menuH,
+        w: window.innerWidth,
+        h: window.innerHeight - menuH - dockH,
+        preMaxX: proc.x,
+        preMaxY: proc.y,
+        preMaxW: proc.w,
+        preMaxH: proc.h
+      };
     }
-    this.applyWindowTransform(appId);
-    this.state.saveState();
+    Astra.syscall('ui:setWindowState', appId, patch).then(() => {
+      this.applyWindowTransform(appId);
+    });
   }
 
   // ==========================================
@@ -922,7 +1043,7 @@ export class UIController {
     if (toggleBtn) {
       toggleBtn.addEventListener('click', () => {
         sidebar.classList.toggle('collapsed');
-        this.state.systemVars.sidebarOpen = !sidebar.classList.contains('collapsed');
+        Astra.syscall('ui:setSystemVar', 'sidebarOpen', !sidebar.classList.contains('collapsed'));
       });
     }
 
@@ -931,7 +1052,7 @@ export class UIController {
     if (dockToggle) {
       dockToggle.addEventListener('click', () => {
         sidebar.classList.toggle('collapsed');
-        this.state.systemVars.sidebarOpen = !sidebar.classList.contains('collapsed');
+        Astra.syscall('ui:setSystemVar', 'sidebarOpen', !sidebar.classList.contains('collapsed'));
       });
     }
 
@@ -946,8 +1067,7 @@ export class UIController {
         chatInput.value = '';
         setTimeout(() => {
           this.addChatMessage('astra', `I've noted your request: "${msg}". Processing...`);
-          this.state.addAuditLog('Astra', `User query: ${msg}`);
-          this.state.saveState();
+          Astra.syscall('ui:addAuditLog', 'Astra', `User query: ${msg}`);
         }, 800);
       };
       chatSend.addEventListener('click', sendMsg);
@@ -976,6 +1096,26 @@ export class UIController {
       if (isMeta && e.key === 'k') {
         e.preventDefault();
         this.toggleCommandPalette();
+      }
+      // Cmd+N — Open Terminal
+      if (isMeta && e.key === 'n') {
+        e.preventDefault();
+        this.openApp('terminal');
+      }
+      // Cmd+Q — Close Active Window
+      if (isMeta && e.key === 'q') {
+        e.preventDefault();
+        if (this.state.activeWindow) this.closeApp(this.state.activeWindow);
+      }
+      // Cmd+Tab — Cycle active window
+      if (isMeta && e.key === 'Tab') {
+        e.preventDefault();
+        const activeProcs = Object.keys(this.state.processes).filter(appId => this.state.processes[appId].open);
+        if (activeProcs.length > 1) {
+          const currentIdx = activeProcs.indexOf(this.state.activeWindow);
+          const nextIdx = (currentIdx + 1) % activeProcs.length;
+          this.focusWindow(activeProcs[nextIdx]);
+        }
       }
       // Cmd+L — Lock Screen
       if (isMeta && e.key === 'l') {
@@ -1025,19 +1165,18 @@ export class UIController {
 
   setFocusMode(mode) {
     if (!['coding', 'deepwork', 'research'].includes(mode)) return;
-    if (this.state.registry.system === undefined) this.state.registry.system = {};
-    this.state.registry.system.focusMode = mode;
-    this.state.saveState();
+    Astra.syscall('ui:setRegistryVal', 'system', 'focusMode', mode);
 
     const hueColors = { coding: 'cyan', deepwork: 'amber', research: 'blue' };
     const accent = Reflect.get(hueColors, mode);
-    this.state.registry.appearance.accentColor = accent;
-    this.applyTheme();
+    Astra.syscall('ui:setRegistryVal', 'appearance', 'accentColor', accent).then(() => {
+      this.applyTheme();
+    });
 
     const notifBell = document.getElementById('notif-bell');
     
     if (mode === 'deepwork') {
-      this.state.registry.system.notificationsSilenced = true;
+      Astra.syscall('ui:setRegistryVal', 'system', 'notificationsSilenced', true);
       if (notifBell) {
         notifBell.setAttribute('title', 'Notifications Silenced (DND)');
         notifBell.style.color = 'var(--color-amber)';
@@ -1052,7 +1191,7 @@ export class UIController {
         }
       });
     } else {
-      this.state.registry.system.notificationsSilenced = false;
+      Astra.syscall('ui:setRegistryVal', 'system', 'notificationsSilenced', false);
       if (notifBell) {
         notifBell.setAttribute('title', 'Notifications');
         notifBell.style.color = '';
@@ -1072,8 +1211,6 @@ export class UIController {
     if (dbBody && window.AstraApps.dashboard) {
       window.AstraApps.dashboard(dbBody, this);
     }
-    
-    this.state.saveState();
   }
 
   initWorkspaces() {
@@ -1095,8 +1232,7 @@ export class UIController {
 
   switchWorkspace(idx) {
     if (idx < 0 || idx > 2) return;
-    this.state.systemVars.currentWorkspace = idx;
-    this.state.saveState();
+    Astra.syscall('ui:setSystemVar', 'currentWorkspace', idx);
 
     // Exits Mission Control if active
     if (this.state.systemVars.missionControlActive) {
@@ -1127,11 +1263,13 @@ export class UIController {
       const appId = win.getAttribute('data-app');
       const proc = Reflect.get(this.state.processes, window.sanitizeKey(appId));
       if (proc) {
-        if (proc.workspace === undefined) proc.workspace = 0;
-        win.style.setProperty('--window-workspace', proc.workspace);
+        if (proc.workspace === undefined) {
+          Astra.syscall('ui:setWindowState', appId, { workspace: 0 });
+        }
+        win.style.setProperty('--window-workspace', proc.workspace || 0);
         
         // Hide windows in other workspaces
-        win.classList.toggle('hidden-workspace', proc.workspace !== currentWp);
+        win.classList.toggle('hidden-workspace', (proc.workspace || 0) !== currentWp);
       }
     });
   }
@@ -1141,7 +1279,7 @@ export class UIController {
     if (!container) return;
 
     const isActive = container.classList.toggle('mission-control-active');
-    this.state.systemVars.missionControlActive = isActive;
+    Astra.syscall('ui:setSystemVar', 'missionControlActive', isActive);
     
     const windows = Array.from(document.querySelectorAll('.window:not(.hidden):not(.hidden-workspace)'));
     if (!isActive) {
@@ -1492,5 +1630,168 @@ export class UIController {
       win.querySelector('.dot-max')?.addEventListener('click', () => this.maximizeApp(appId));
       win.addEventListener('mousedown', () => this.focusWindow(appId));
     });
+  }
+
+  // ==========================================
+  // Safe Mode Banner
+  // ==========================================
+  initSafeModeBanner() {
+    const banner = document.getElementById('safe-mode-banner');
+    const exitBtn = document.getElementById('safe-mode-exit-btn');
+    if (!banner || !exitBtn) return;
+
+    exitBtn.addEventListener('click', () => {
+      Astra.syscall('ui:setSafeMode', false).then(() => {
+        this.updateSafeModeBanner();
+        this.showToast('Safe Mode Disabled', 'All write operations and agent actions are now permitted.', 'info');
+        Astra.syscall('ui:logEvent', 'security.safe_mode', 'user', { enabled: false }, 'INFO');
+      });
+    });
+
+    // Listen for registry changes
+    window.AstraBus?.on('registry.changed', () => this.updateSafeModeBanner());
+
+    // Initial render
+    this.updateSafeModeBanner();
+  }
+
+  updateSafeModeBanner() {
+    const isSafeMode = this.state.registry?.security?.safeMode === true;
+    const banner = document.getElementById('safe-mode-banner');
+    if (!banner) return;
+
+    if (isSafeMode) {
+      banner.classList.remove('hidden');
+      document.body.classList.add('safe-mode-active');
+    } else {
+      banner.classList.add('hidden');
+      document.body.classList.remove('safe-mode-active');
+    }
+  }
+
+  // ==========================================
+  // Observability Monitor Panel (sysmonitor app)
+  // ==========================================
+  renderObservabilityPanel(container) {
+    const kernel = window.AstraKernel;
+    if (!kernel) return;
+
+    const processCount = this.state.processTable.length;
+    const eventLog = this.state.eventLog || [];
+    const recentEvents = eventLog.slice(-100);
+    
+    // Compute metrics from event log
+    const syscallEvents = recentEvents.filter(e => e.type === 'kernel.syscall');
+    const errorEvents = recentEvents.filter(e => e.level === 'ERROR' || e.level === 'WARN');
+    const syscallCount = syscallEvents.length;
+    const errorRate = recentEvents.length > 0 
+      ? ((errorEvents.length / recentEvents.length) * 100).toFixed(1) 
+      : '0.0';
+
+    // Compute average latency from syscall metadata
+    const latencies = syscallEvents
+      .map(e => e.details?.durationMs)
+      .filter(d => typeof d === 'number');
+    const avgLatency = latencies.length > 0
+      ? (latencies.reduce((a, b) => a + b, 0) / latencies.length).toFixed(1)
+      : '0.0';
+
+    // Latency histogram buckets: <1ms, 1-5ms, 5-10ms, 10-50ms, >50ms
+    const buckets = [0, 0, 0, 0, 0];
+    const bucketLabels = ['<1ms', '1-5ms', '5-10ms', '10-50ms', '>50ms'];
+    latencies.forEach(d => {
+      if (d < 1) buckets[0]++;
+      else if (d < 5) buckets[1]++;
+      else if (d < 10) buckets[2]++;
+      else if (d < 50) buckets[3]++;
+      else buckets[4]++;
+    });
+    const maxBucket = Math.max(...buckets, 1);
+
+    // CPU and Mem
+    const totalCpu = kernel.getTotalCpu();
+    const totalMem = kernel.getTotalMem();
+
+    const cpuClass = parseFloat(totalCpu) > 80 ? 'danger' : parseFloat(totalCpu) > 50 ? 'warn' : '';
+    const memClass = totalMem > 800 ? 'danger' : totalMem > 500 ? 'warn' : '';
+
+    const latencyBarsHTML = buckets.map((count, i) => {
+      const height = Math.max(3, (count / maxBucket) * 55);
+      return `<div class="obs-latency-bar" style="height:${height}px" data-label="${bucketLabels[i]}: ${count}"></div>`;
+    }).join('');
+
+    // Recent event log rows (last 20)
+    const logRows = recentEvents.slice(-20).reverse().map(e => {
+      const time = new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      const levelClass = e.level || 'INFO';
+      const eventType = escapeHTML(e.type || 'unknown');
+      const source = escapeHTML(e.source || '-');
+      return `<tr>
+        <td>${time}</td>
+        <td><span class="obs-log-level ${levelClass}">${levelClass}</span></td>
+        <td>${eventType}</td>
+        <td>${source}</td>
+      </tr>`;
+    }).join('');
+
+    window.renderSafeHTML(container, `
+      <div class="observability-panel">
+        <div class="obs-header">
+          <h3><span class="live-dot"></span> System Observability</h3>
+        </div>
+
+        <div class="obs-metrics-grid">
+          <div class="obs-metric-card ${cpuClass}">
+            <span class="obs-metric-label">CPU Usage</span>
+            <span class="obs-metric-value">${escapeHTML(String(totalCpu))}</span>
+            <span class="obs-metric-unit">% total</span>
+          </div>
+          <div class="obs-metric-card ${memClass}">
+            <span class="obs-metric-label">Memory</span>
+            <span class="obs-metric-value">${totalMem}</span>
+            <span class="obs-metric-unit">MB allocated</span>
+          </div>
+          <div class="obs-metric-card">
+            <span class="obs-metric-label">Processes</span>
+            <span class="obs-metric-value">${processCount}</span>
+            <span class="obs-metric-unit">active</span>
+          </div>
+          <div class="obs-metric-card">
+            <span class="obs-metric-label">Syscalls</span>
+            <span class="obs-metric-value">${syscallCount}</span>
+            <span class="obs-metric-unit">recent</span>
+          </div>
+          <div class="obs-metric-card ${parseFloat(errorRate) > 10 ? 'danger' : parseFloat(errorRate) > 5 ? 'warn' : ''}">
+            <span class="obs-metric-label">Error Rate</span>
+            <span class="obs-metric-value">${errorRate}</span>
+            <span class="obs-metric-unit">% of events</span>
+          </div>
+          <div class="obs-metric-card">
+            <span class="obs-metric-label">Avg Latency</span>
+            <span class="obs-metric-value">${avgLatency}</span>
+            <span class="obs-metric-unit">ms / syscall</span>
+          </div>
+        </div>
+
+        <div class="obs-latency-section">
+          <h4>Syscall Latency Distribution</h4>
+          <div class="obs-latency-bars">
+            ${latencyBarsHTML}
+          </div>
+        </div>
+
+        <div class="obs-log-section">
+          <h4>Event Log (Recent)</h4>
+          <table class="obs-log-table">
+            <thead>
+              <tr><th>Time</th><th>Level</th><th>Event</th><th>Source</th></tr>
+            </thead>
+            <tbody>
+              ${logRows || '<tr><td colspan="4" style="text-align:center;color:var(--text-muted)">No events recorded yet</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `);
   }
 }

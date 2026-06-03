@@ -5,7 +5,7 @@ let syscallId = 0;
 
 // Listen for messages from the Kernel
 self.onmessage = async function(e) {
-  const { type, code, path, env, id, result, error } = e.data;
+  const { type, code, path, env, id, result, error, token } = e.data;
   
   if (type === 'syscall_response') {
     const pending = pendingSyscalls.get(id);
@@ -38,7 +38,7 @@ self.onmessage = async function(e) {
         return new Promise((resolve, reject) => {
           const currentId = syscallId++;
           pendingSyscalls.set(currentId, { resolve, reject });
-          self.postMessage({ type: 'syscall', id: currentId, callName, args });
+          self.postMessage({ type: 'syscall', id: currentId, token, callName, args });
         });
       }
     };

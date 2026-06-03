@@ -40,17 +40,17 @@ window.AstraApps.explorer = function(container, ui) {
 
     let explorerGridHTML = '';
     if (entries.length === 0) {
-      explorerGridHTML = `<div class="explorer-empty">${searchTerm.trim() ? 'No matching files' : (isTrashView ? 'Trash Bin is empty' : 'This folder is empty')}</div>`;
+      explorerGridHTML = window.html`<div class="explorer-empty">${searchTerm.trim() ? 'No matching files' : (isTrashView ? 'Trash Bin is empty' : 'This folder is empty')}</div>`;
     } else {
       entries.forEach(e => {
         const selectedClass = selectedItem === e.name ? 'selected' : '';
         const icon = e.type === 'dir' ? '📁' : getFileIcon(e.name);
-        const sizeHTML = e.type === 'file' ? '<div class="explorer-item-size">' + getFileSize(e.content) + '</div>' : '';
-        explorerGridHTML += `
-          <div class="explorer-item-v2 ${selectedClass}" data-name="${window.escapeHTML(e.name)}" data-type="${window.escapeHTML(e.type)}">
+        const sizeHTML = e.type === 'file' ? window.html`<div class="explorer-item-size">${getFileSize(e.content)}</div>` : '';
+        explorerGridHTML += window.html`
+          <div class="explorer-item-v2 ${selectedClass}" data-name="${e.name}" data-type="${e.type}">
             <div class="explorer-item-icon">${icon}</div>
-            <div class="explorer-item-name" title="${isTrashView ? 'Original Path: ' + window.escapeHTML(e.originalPath) : window.escapeHTML(e.name)}">${window.escapeHTML(e.name)}</div>
-            ${sizeHTML}
+            <div class="explorer-item-name" title="${isTrashView ? 'Original Path: ' + e.originalPath : e.name}">${e.name}</div>
+            ${window.safeHTML(sizeHTML)}
           </div>
         `;
       });
@@ -64,17 +64,17 @@ window.AstraApps.explorer = function(container, ui) {
           return '<span class="breadcrumb-sep">/</span><span class="breadcrumb-part" data-path="' + path + '">' + window.escapeHTML(p) + '</span>';
         }).join('');
 
-    window.renderSafeHTML(container, `
+    window.renderSafeHTML(container, window.html`
       <div class="explorer-app-v2">
         <div class="explorer-toolbar">
           <button class="explorer-tb-btn" id="exp-back" title="Back" ${isTrashView ? 'disabled' : ''}>◀</button>
           <div class="explorer-breadcrumb">
-            ${isTrashView ? '' : '<span class="breadcrumb-part" data-path="/">/</span>'}
-            ${breadcrumbHTML}
+            ${window.safeHTML(isTrashView ? '' : '<span class="breadcrumb-part" data-path="/">/</span>')}
+            ${window.safeHTML(breadcrumbHTML)}
           </div>
-          <input type="text" class="explorer-search" id="exp-search" placeholder="Search..." value="${window.escapeHTML(searchTerm)}">
+          <input type="text" class="explorer-search" id="exp-search" placeholder="Search..." value="${searchTerm}">
           <div class="explorer-tb-actions">
-            ${isTrashView ? `
+            ${window.safeHTML(isTrashView ? `
               <button class="explorer-tb-btn" id="exp-restore" title="Restore" ${!selectedItem ? 'disabled' : ''}>↩ Restore</button>
               <button class="explorer-tb-btn" id="exp-empty-trash" title="Empty Trash">🗑 Empty</button>
             ` : `
@@ -84,7 +84,7 @@ window.AstraApps.explorer = function(container, ui) {
               <button class="explorer-tb-btn" id="exp-paste" title="Paste" ${!window.AstraClipboard ? 'disabled' : ''}>📥</button>
               <button class="explorer-tb-btn" id="exp-rename" title="Rename" ${!selectedItem ? 'disabled' : ''}>✏️</button>
               <button class="explorer-tb-btn" id="exp-delete" title="Delete" ${!selectedItem ? 'disabled' : ''}>🗑</button>
-            `}
+            `)}
           </div>
         </div>
         <div class="explorer-sidebar-v2">
@@ -106,7 +106,7 @@ window.AstraApps.explorer = function(container, ui) {
           </div>
         </div>
         <div class="explorer-main-v2" id="exp-main">
-          ${explorerGridHTML}
+          ${window.safeHTML(explorerGridHTML)}
         </div>
         <div class="explorer-statusbar">${entries.length} items • ${isTrashView ? 'Trash Bin' : currentPath}</div>
       </div>
@@ -201,11 +201,12 @@ window.AstraApps.explorer = function(container, ui) {
           if (emptyMsg) emptyMsg.style.display = 'none';
         }
       });
-      // Keep input focused
-      searchInput.focus();
-      // Move cursor to end of input text
-      const len = searchInput.value.length;
-      searchInput.setSelectionRange(len, len);
+      // Only auto-focus search if user was actively searching
+      if (searchTerm.trim()) {
+        searchInput.focus();
+        const len = searchInput.value.length;
+        searchInput.setSelectionRange(len, len);
+      }
     }
 
     // Toolbar actions
@@ -249,23 +250,27 @@ window.AstraApps.explorer = function(container, ui) {
         const name = prompt('File name:');
         if (name && name.trim()) {
           const path = currentPath === '/' ? `/${name.trim()}` : `${currentPath}/${name.trim()}`;
-          try {
-            Astra.syscall('fs:write', path, '');
-            ui.showToast('File Created', name.trim(), 'success');
-            render();
-          } catch (err) {
-            ui.showToast('Error', err.message, 'error');
-          }
+          Astra.syscall('fs:write', path, '')
+            .then(() => {
+              ui.showToast('File Created', name.trim(), 'success');
+              render();
+            })
+            .catch(err => {
+              ui.showToast('Error', err.message, 'error');
+            });
         }
       });
       container.querySelector('#exp-copy')?.addEventListener('click', () => {
         if (!selectedItem) return;
         const srcPath = currentPath === '/' ? `/${selectedItem}` : `${currentPath}/${selectedItem}`;
-        window.AstraClipboard = {
+        if (!window.AstraState) window.AstraState = {};
+        window.AstraState.clipboard = {
           type: state.resolvePath(srcPath).type,
           name: selectedItem,
           path: srcPath
         };
+        // Keep legacy reference for backwards compatibility
+        window.AstraClipboard = window.AstraState.clipboard;
 
         const node = state.resolvePath(srcPath);
         if (node && node.type === 'file') {
@@ -429,6 +434,29 @@ window.AstraApps.editor = function(container, ui) {
   let openFiles = [];
   let activeFileIdx = -1;
 
+  function highlightSyntax(code, filename) {
+    if (!filename) return window.escapeHTML(code);
+    let escaped = window.escapeHTML(code);
+    if (filename.endsWith('.js') || filename.endsWith('.json')) {
+      const keywords = /\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|try|catch|finally|throw|class|export|import|from|default|null|undefined|true|false|this|async|await)\b/g;
+      escaped = escaped.replace(keywords, '<span style="color: #ff757f; font-weight: bold;">$1</span>');
+      escaped = escaped.replace(/\b(\d+)\b/g, '<span style="color: #ff966c;">$1</span>');
+      escaped = escaped.replace(/(&quot;[^\n]*?&quot;)/g, '<span style="color: #c3e88d;">$1</span>');
+      escaped = escaped.replace(/(&#39;[^\n]*?&#39;)/g, '<span style="color: #c3e88d;">$1</span>');
+      escaped = escaped.replace(/(`[^\n]*?`)/g, '<span style="color: #c3e88d;">$1</span>');
+      escaped = escaped.replace(/(\/\/.*)/g, '<span style="color: #637588; font-style: italic;">$1</span>');
+    } else if (filename.endsWith('.sh')) {
+      const keywords = /\b(if|then|else|fi|for|in|do|done|while|case|esac|exit|echo|export|unset|alias|source)\b/g;
+      escaped = escaped.replace(keywords, '<span style="color: #82aaff; font-weight: bold;">$1</span>');
+      escaped = escaped.replace(/(#.*)/g, '<span style="color: #637588; font-style: italic;">$1</span>');
+    } else if (filename.endsWith('.md')) {
+      escaped = escaped.replace(/^(#+ .*)$/gm, '<span style="color: #82aaff; font-weight: bold;">$1</span>');
+      escaped = escaped.replace(/(\*\*.*?\*\*)/g, '<span style="color: #ff757f; font-weight: bold;">$1</span>');
+      escaped = escaped.replace(/(`.*?`)/g, '<span style="color: #c3e88d;">$1</span>');
+    }
+    return escaped;
+  }
+
   function getAllFiles(node, path = '') {
     let files = [];
     if (!node || !node.children) return files;
@@ -465,15 +493,17 @@ window.AstraApps.editor = function(container, ui) {
     return formattedLines.join('\n');
   }
 
-  function openFileInEditor(path) {
+  async function openFileInEditor(path) {
     const existing = openFiles.findIndex(f => f.path === path);
     if (existing >= 0) { activeFileIdx = existing; renderEditor(); return; }
     try {
-      const locked = Astra.syscall('fs:lock', path, 'exclusive');
+      const lockRes = await Astra.syscall('fs:lock', path, 'exclusive');
+      const locked = lockRes && lockRes.status === 'success' ? lockRes.result : false;
       if (!locked) {
         ui.showToast('Lock Notice', 'File is locked or currently edited by another process.', 'warning');
       }
-      const content = Astra.syscall('fs:read', path);
+      const readRes = await Astra.syscall('fs:read', path);
+      const content = readRes && readRes.status === 'success' ? readRes.result : '';
       const name = path.split('/').pop();
       openFiles.push({ path, name, content, locked });
       activeFileIdx = openFiles.length - 1;
@@ -484,6 +514,7 @@ window.AstraApps.editor = function(container, ui) {
   }
 
   window.AstraApps._editorOpen = openFileInEditor;
+  window.editorOpenFile = openFileInEditor;
 
   function renderEditor() {
     const projectDir = ui.state.resolvePath('/Project_Astra');
@@ -495,39 +526,44 @@ window.AstraApps.editor = function(container, ui) {
 
     const editorTabsHTML = openFiles.map((f, i) => {
       const activeClass = i === activeFileIdx ? 'active' : '';
-      return `
+      return window.html`
         <div class="editor-tab ${activeClass}" data-idx="${i}">
-          <span>${window.escapeHTML(f.name)}</span>
+          <span>${f.name}</span>
           <span class="editor-tab-close" data-close="${i}">×</span>
         </div>
       `;
     }).join('');
 
-    window.renderSafeHTML(container, `
+    const sidebarFilesHTML = sidebarFiles.map(f => {
+      const indent = (f.path.split('/').length - 2) * 12;
+      const icon = f.type === 'dir' ? '📁' : '📄';
+      const isActive = activeFile && activeFile.path === f.path;
+      const activeClass = isActive ? 'active' : '';
+      return window.html`<li class="editor-file-item ${f.type} ${activeClass}" data-path="${f.path}" style="padding-left: ${(indent + 10)}px">${icon} ${f.name}</li>`;
+    }).join('');
+
+    window.renderSafeHTML(container, window.html`
       <div class="editor-app">
         <div class="editor-sidebar">
           <div class="editor-sidebar-title">Explorer</div>
           <ul class="editor-file-list">
-            ${sidebarFiles.map(f => {
-              const indent = (f.path.split('/').length - 2) * 12;
-              const icon = f.type === 'dir' ? '📁' : '📄';
-              const isActive = activeFile && activeFile.path === f.path;
-              const activeClass = isActive ? 'active' : '';
-              return '<li class="editor-file-item ' + window.escapeHTML(f.type) + ' ' + activeClass + '" data-path="' + f.path + '" style="padding-left: ' + (indent + 10) + 'px">' + icon + ' ' + window.escapeHTML(f.name) + '</li>';
-            }).join('')}
+            ${window.safeHTML(sidebarFilesHTML)}
           </ul>
         </div>
         <div class="editor-main">
           <div class="editor-tabs">
             <div style="display: flex;">
-              ${editorTabsHTML}
+              ${window.safeHTML(editorTabsHTML)}
             </div>
             <div class="editor-actions-tb" style="display: flex; align-items: center; padding-right: 8px; gap: 6px;">
               <button class="editor-tb-btn" id="editor-run" title="Run Script" ${!activeFile ? 'disabled' : ''}>⚡ Run</button>
               <button class="editor-tb-btn" id="editor-format" title="Format Code" ${!activeFile ? 'disabled' : ''}>🧹 Format</button>
             </div>
           </div>
-          <textarea class="editor-textarea" id="editor-content" spellcheck="false" ${!activeFile ? 'disabled placeholder="Select a file to edit..."' : ''}>${activeFile ? activeFile.content : ''}</textarea>
+          <div class="editor-edit-container" style="position: relative; flex-grow: 1; display: flex; overflow: hidden; background: rgba(0,0,0,0.15); min-height: 0;">
+            <pre class="editor-highlight" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0; padding: 16px; box-sizing: border-box; font-family: var(--font-mono), monospace; font-size: 12.5px; line-height: 1.5; white-space: pre; overflow: hidden; pointer-events: none; color: #a6accd; background: transparent; text-align: left;"></pre>
+            <textarea class="editor-textarea" id="editor-content" spellcheck="false" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: transparent; color: transparent; caret-color: var(--text-primary); font-family: var(--font-mono), monospace; font-size: 12.5px; line-height: 1.5; padding: 16px; border: none; resize: none; box-sizing: border-box; outline: none; margin: 0; overflow: auto;" ${!activeFile ? 'disabled placeholder="Select a file to edit..."' : ''}>${activeFile ? activeFile.content : ''}</textarea>
+          </div>
           <div class="editor-statusbar">
             <span>${activeFile ? activeFile.path : 'No file open'}</span>
             <span>${activeFile ? `${activeFile.content.split('\n').length} lines` : ''}</span>
@@ -564,14 +600,31 @@ window.AstraApps.editor = function(container, ui) {
         renderEditor();
       });
     });
+    // Highlight initial content & Sync Scroll
+    const initialTextarea = container.querySelector('#editor-content');
+    const initialPre = container.querySelector('.editor-highlight');
+    if (initialTextarea && initialPre && activeFile) {
+      window.renderSafeHTML(initialPre, highlightSyntax(activeFile.content, activeFile.name));
+      initialTextarea.addEventListener('scroll', () => {
+        initialPre.scrollTop = initialTextarea.scrollTop;
+        initialPre.scrollLeft = initialTextarea.scrollLeft;
+      });
+    }
+
+    // Debounced auto-save: persist only after 500ms of idle typing
+    let _saveTimer = null;
     container.querySelector('#editor-content')?.addEventListener('input', (e) => {
       if (activeFile) {
         activeFile.content = e.target.value;
-        try {
-          Astra.syscall('fs:write', activeFile.path, activeFile.content);
-        } catch (err) {
-          ui.showToast('Write Error', err.message, 'error');
+        const pre = container.querySelector('.editor-highlight');
+        if (pre) {
+          window.renderSafeHTML(pre, highlightSyntax(e.target.value, activeFile.name));
         }
+        if (_saveTimer) clearTimeout(_saveTimer);
+        _saveTimer = setTimeout(() => {
+          Astra.syscall('fs:write', activeFile.path, activeFile.content)
+            .catch(err => ui.showToast('Write Error', err.message, 'error'));
+        }, 500);
       }
     });
 
@@ -637,7 +690,7 @@ window.AstraApps.memory = function(container, ui) {
       if (!src || !tgt) return '';
       const isHighlighted = activeSearch ? (src.label.toLowerCase().includes(activeSearch) || tgt.label.toLowerCase().includes(activeSearch)) : false;
       const opacity = activeSearch ? (isHighlighted ? '1' : '0.15') : '0.4';
-      return `<line class="edge" x1="${src.x}" y1="${src.y}" x2="${tgt.x}" y2="${tgt.y}" style="opacity: ${opacity}; transition: opacity 0.2s;" />`;
+      return window.html`<line class="edge" x1="${src.x}" y1="${src.y}" x2="${tgt.x}" y2="${tgt.y}" style="opacity: ${opacity}; transition: opacity 0.2s;" />`;
     }).join('');
 
     const nodesHTML = nodes.map(n => {
@@ -646,7 +699,7 @@ window.AstraApps.memory = function(container, ui) {
       const isMatched = activeSearch ? n.label.toLowerCase().includes(activeSearch) || n.type.toLowerCase().includes(activeSearch) : true;
       const opacity = isMatched ? '1' : '0.2';
       const glow = (activeSearch && isMatched) ? `stroke: var(--color-primary); stroke-width: 3px; filter: drop-shadow(0 0 8px var(--color-primary));` : '';
-      return `
+      return window.html`
         <g class="node" transform="translate(${n.x}, ${n.y})" style="opacity: ${opacity}; transition: opacity 0.2s; ${glow}">
           <circle r="24" fill="${color}" opacity="0.3" stroke="${color}" stroke-width="2"/>
           <circle r="6" fill="${color}"/>
@@ -655,12 +708,14 @@ window.AstraApps.memory = function(container, ui) {
       `;
     }).join('');
 
-    window.renderSafeHTML(container, `
+    const optionsHTML = nodes.map(n => window.html`<option value="${n.id}">${n.label}</option>`).join('');
+
+    window.renderSafeHTML(container, window.html`
       <div class="memory-app">
         <div class="memory-header-row">
           <div><strong>Memory Graph</strong> <span style="color: var(--text-muted); font-size: 12px">${nodes.length} nodes, ${links.length} links</span></div>
           <div style="display: flex; gap: 8px; align-items: center;">
-            <input type="text" class="memory-search-input" id="mem-search" placeholder="Search node..." value="${window.escapeHTML(searchQuery)}" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 8px; font-size: 11px; outline: none; width: 120px;" />
+            <input type="text" class="memory-search-input" id="mem-search" placeholder="Search node..." value="${searchQuery}" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 8px; font-size: 11px; outline: none; width: 120px;" />
             <button class="btn btn-secondary" id="mem-clear" style="padding: 4px 8px; font-size: 11px;">Clear</button>
           </div>
         </div>
@@ -694,7 +749,7 @@ window.AstraApps.memory = function(container, ui) {
               <label style="font-size: 10px; color: var(--text-muted);">Connect to</label>
               <select id="mem-link-target" style="background: rgba(18, 33, 49, 0.95); border: 1px solid var(--border-glass); border-radius: var(--radius-base); color: var(--text-primary); padding: 4px 6px; font-size: 11px; outline: none;">
                 <option value="">(None)</option>
-                ${nodes.map(n => `<option value="${n.id}">${window.escapeHTML(n.label)}</option>`).join('')}
+                ${window.safeHTML(optionsHTML)}
               </select>
             </div>
             <div class="mem-form-group" style="display: flex; flex-direction: column; gap: 4px;">
@@ -705,8 +760,8 @@ window.AstraApps.memory = function(container, ui) {
           </div>
           <div class="memory-visualizer" style="flex-grow: 1; display: flex; align-items: center; justify-content: center; position: relative;">
             <svg class="graph-svg" viewBox="0 0 ${svgW} ${svgH}" style="width: 100%; height: 100%;">
-              ${linksHTML}
-              ${nodesHTML}
+              ${window.safeHTML(linksHTML)}
+              ${window.safeHTML(nodesHTML)}
             </svg>
           </div>
         </div>
@@ -752,13 +807,13 @@ window.AstraApps.memory = function(container, ui) {
     }
 
     // Bind Clear button
-    container.querySelector('#mem-clear')?.addEventListener('click', () => {
-      ui.state.clearMemoryGraph();
+    container.querySelector('#mem-clear')?.addEventListener('click', async () => {
+      await Astra.syscall('state:clearMemoryGraph');
       renderGraph();
     });
 
     // Bind Submit button
-    container.querySelector('#mem-submit')?.addEventListener('click', () => {
+    container.querySelector('#mem-submit')?.addEventListener('click', async () => {
       const nodeId = container.querySelector('#mem-node-id')?.value.trim();
       const nodeLabel = container.querySelector('#mem-node-label')?.value.trim();
       const nodeType = container.querySelector('#mem-node-type')?.value;
@@ -775,10 +830,10 @@ window.AstraApps.memory = function(container, ui) {
         return;
       }
       
-      ui.state.addMemoryNode(nodeId, nodeLabel, nodeType);
+      await Astra.syscall('state:addMemoryNode', nodeId, nodeLabel, nodeType);
       
       if (linkTarget) {
-        ui.state.addMemoryLink(nodeId, linkTarget, linkRelation);
+        await Astra.syscall('state:addMemoryLink', nodeId, linkTarget, linkRelation);
       }
       
       ui.showToast('Node Created', nodeLabel, 'success');
@@ -815,7 +870,7 @@ window.AstraApps.terminal = function(container, ui) {
   };
 
   function render() {
-    window.renderSafeHTML(container, `
+    window.renderSafeHTML(container, window.html`
       <div class="terminal-app">
         <div class="terminal-outputs" id="term-out"></div>
         <div class="terminal-input-row">
@@ -877,6 +932,7 @@ window.AstraApps.terminal = function(container, ui) {
     if (lastWord === undefined) return;
     
     let matches = [];
+    const kernel = window.AstraKernel;
     
     // If completing the first word (command name)
     if (parts.length === 1) {
@@ -887,26 +943,112 @@ window.AstraApps.terminal = function(container, ui) {
         'ping', 'curl', 'ifconfig', 'nslookup', 'netstat', 'wget', 'hostname', 
         'git', 'jobs', 'fg', 'bg', 'neofetch', 'uname', 'date', 'df', 'free', 
         'dmesg', 'clear', 'history', 'sysreset', 'health', 'cowsay', 'fortune', 
-        'sl', 'figlet', 'node', 'sysinfo'
+        'sl', 'figlet', 'node', 'sysinfo', 'head', 'tail', 'sort', 'uniq',
+        'source', 'alias', 'type', 'which', 'man', 'stat'
       ];
-      matches = commandsList.filter(cmd => cmd.startsWith(lastWord));
+      matches = commandsList
+        .filter(cmd => cmd.startsWith(lastWord))
+        .map(cmd => ({ name: cmd, type: 'cmd' }));
+      
+      // Add aliases
+      if (kernel && kernel.aliases) {
+        Object.keys(kernel.aliases)
+          .filter(a => a.startsWith(lastWord))
+          .forEach(a => matches.push({ name: a, type: 'alias' }));
+      }
+      
+      // Add shell functions
+      if (kernel && kernel.shellFunctions) {
+        Object.keys(kernel.shellFunctions)
+          .filter(f => f.startsWith(lastWord))
+          .forEach(f => matches.push({ name: f, type: 'cmd' }));
+      }
     }
     
-    // Also search in current directory VFS paths
-    const dir = ui.state.resolvePath(currentDir);
-    if (dir && dir.children) {
-      const fileMatches = Object.keys(dir.children).filter(n => n.startsWith(lastWord));
-      matches = [...matches, ...fileMatches];
+    // Path completion for file arguments (second word+)
+    if (parts.length > 1 || (parts.length === 1 && lastWord.includes('/'))) {
+      const targetWord = lastWord;
+      let searchDir = currentDir;
+      let prefix = '';
+      
+      if (targetWord.startsWith('/')) {
+        // Absolute path
+        const lastSlash = targetWord.lastIndexOf('/');
+        searchDir = targetWord.substring(0, lastSlash) || '/';
+        prefix = targetWord.substring(0, lastSlash + 1);
+      } else if (targetWord.includes('/')) {
+        // Relative path with slashes
+        const lastSlash = targetWord.lastIndexOf('/');
+        const relDir = targetWord.substring(0, lastSlash);
+        searchDir = resolveRelativePath(relDir);
+        prefix = targetWord.substring(0, lastSlash + 1);
+      }
+      
+      const searchTerm = targetWord.includes('/') 
+        ? targetWord.substring(targetWord.lastIndexOf('/') + 1) 
+        : targetWord;
+      
+      const dir = ui.state.resolvePath(searchDir);
+      if (dir && dir.children) {
+        Object.keys(dir.children)
+          .filter(n => n.startsWith(searchTerm))
+          .forEach(n => {
+            const child = Reflect.get(dir.children, window.sanitizeKey(n));
+            const isDir = child && child.type === 'dir';
+            matches.push({ 
+              name: prefix + n + (isDir ? '/' : ''), 
+              type: isDir ? 'dir' : 'file' 
+            });
+          });
+      }
+    } else {
+      // Also search in current directory when completing first word with no slashes
+      const dir = ui.state.resolvePath(currentDir);
+      if (dir && dir.children) {
+        Object.keys(dir.children)
+          .filter(n => n.startsWith(lastWord))
+          .forEach(n => {
+            const child = Reflect.get(dir.children, window.sanitizeKey(n));
+            const isDir = child && child.type === 'dir';
+            matches.push({ 
+              name: n + (isDir ? '/' : ''), 
+              type: isDir ? 'dir' : 'file' 
+            });
+          });
+      }
     }
     
-    // Deduplicate matches
-    matches = Array.from(new Set(matches));
+    // Deduplicate matches by name
+    const seen = new Set();
+    matches = matches.filter(m => {
+      if (seen.has(m.name)) return false;
+      seen.add(m.name);
+      return true;
+    });
     
     if (matches.length === 1) {
-      parts[parts.length - 1] = matches[0];
-      input.value = parts.join(' ') + (parts.length === 1 ? ' ' : '');
+      Reflect.set(parts, parts.length - 1, matches[0].name);
+      input.value = parts.join(' ') + (matches[0].type === 'dir' ? '' : ' ');
     } else if (matches.length > 1) {
-      addOutput(matches.join('  '), 'info');
+      // Find common prefix for partial completion
+      const names = matches.map(m => m.name);
+      let commonPrefix = names[0];
+      for (let i = 1; i < names.length; i++) {
+        while (!Reflect.get(names, i).startsWith(commonPrefix)) {
+          commonPrefix = commonPrefix.substring(0, commonPrefix.length - 1);
+        }
+      }
+      if (commonPrefix.length > lastWord.length) {
+        Reflect.set(parts, parts.length - 1, commonPrefix);
+        input.value = parts.join(' ');
+      }
+      
+      // Show matches with type labels in terminal output
+      const formatted = matches.map(m => {
+        const typeLabel = m.type === 'dir' ? '\x1b[34m' : m.type === 'alias' ? '\x1b[35m' : '';
+        return m.name;
+      });
+      addOutput(formatted.join('  '), 'info');
     }
   }
 
@@ -987,9 +1129,14 @@ window.AstraApps.terminal = function(container, ui) {
     }
 
     if (res.async) {
-      res.run((text, cls) => addOutput(text, cls)).then(() => {
-        afterExecute(res);
-      });
+      res.run((text, cls) => addOutput(text, cls))
+        .then(() => {
+          afterExecute(res);
+        })
+        .catch((err) => {
+          addOutput(`Error: ${err.message || err}`, 'error');
+          afterExecute(res);
+        });
       return;
     }
 
@@ -1044,20 +1191,13 @@ window.AstraApps.tasks = function(container, ui) {
     `);
 
     // Bind Add Task Button
-    container.querySelector('#btn-add-task')?.addEventListener('click', () => {
+    container.querySelector('#btn-add-task')?.addEventListener('click', async () => {
       const title = prompt('Task Title:');
       if (!title || !title.trim()) return;
       const desc = prompt('Task Description:') || '';
       const assigned = prompt('Assigned Agent (e.g. PlannerAgent, ExecutorAgent, User):') || 'User';
       
-      if (ui.state.addTask) {
-        ui.state.addTask(title.trim(), desc.trim(), 'pending', assigned.trim());
-      } else {
-        const id = 'task-' + Date.now();
-        ui.state.agentTasks.push({ id, title: title.trim(), desc: desc.trim(), status: 'pending', assigned: assigned.trim() });
-        ui.state.addAuditLog('User', `Added task: [${title.trim()}]`);
-        ui.state.saveState();
-      }
+      await Astra.syscall('task:add', title.trim(), desc.trim(), 'pending', assigned.trim());
       ui.showToast('Task Added', title.trim(), 'success');
       
       if (window.updateDashboardStats) window.updateDashboardStats();
@@ -1066,10 +1206,10 @@ window.AstraApps.tasks = function(container, ui) {
 
     // Bind Move Buttons
     container.querySelectorAll('.task-card-move-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const id = btn.getAttribute('data-id');
         const nextStatus = btn.getAttribute('data-action');
-        ui.state.updateTaskStatus(id, nextStatus);
+        await Astra.syscall('task:updateStatus', id, nextStatus);
         
         if (window.updateDashboardStats) window.updateDashboardStats();
         renderBoard();
@@ -1078,19 +1218,9 @@ window.AstraApps.tasks = function(container, ui) {
 
     // Bind Delete Buttons
     container.querySelectorAll('.task-card-delete-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const id = btn.getAttribute('data-id');
-        if (ui.state.deleteTask) {
-          ui.state.deleteTask(id);
-        } else {
-          const idx = ui.state.agentTasks.findIndex(t => t.id === id);
-          if (idx !== -1) {
-            const task = ui.state.agentTasks[idx];
-            ui.state.agentTasks.splice(idx, 1);
-            ui.state.addAuditLog('User', `Deleted task: [${task.title}]`);
-            ui.state.saveState();
-          }
-        }
+        await Astra.syscall('task:delete', id);
         ui.showToast('Task Deleted', '', 'info');
         
         if (window.updateDashboardStats) window.updateDashboardStats();
@@ -1105,37 +1235,37 @@ window.AstraApps.tasks = function(container, ui) {
       let moveRight = '';
       
       if (colId === 'pending') {
-        moveRight = `<button class="task-card-move-btn" data-id="${t.id}" data-action="progress" title="Move to In Progress">▶</button>`;
+        moveRight = window.html`<button class="task-card-move-btn" data-id="${t.id}" data-action="progress" title="Move to In Progress">▶</button>`;
       } else if (colId === 'progress') {
-        moveLeft = `<button class="task-card-move-btn" data-id="${t.id}" data-action="pending" title="Move to Pending">◀</button>`;
-        moveRight = `<button class="task-card-move-btn" data-id="${t.id}" data-action="completed" title="Move to Completed">▶</button>`;
+        moveLeft = window.html`<button class="task-card-move-btn" data-id="${t.id}" data-action="pending" title="Move to Pending">◀</button>`;
+        moveRight = window.html`<button class="task-card-move-btn" data-id="${t.id}" data-action="completed" title="Move to Completed">▶</button>`;
       } else if (colId === 'completed') {
-        moveLeft = `<button class="task-card-move-btn" data-id="${t.id}" data-action="progress" title="Move to In Progress">◀</button>`;
+        moveLeft = window.html`<button class="task-card-move-btn" data-id="${t.id}" data-action="progress" title="Move to In Progress">◀</button>`;
       }
       
-      return `
-        <div class="task-card-ui" data-id="${window.escapeHTML(t.id)}">
+      return window.html`
+        <div class="task-card-ui" data-id="${t.id}">
           <div class="task-card-header">
-            <div class="task-card-title">${window.escapeHTML(t.title)}</div>
+            <div class="task-card-title">${t.title}</div>
             <button class="task-card-delete-btn" data-id="${t.id}" title="Delete Task">✕</button>
           </div>
-          <div class="task-card-desc">${window.escapeHTML(t.desc)}</div>
+          <div class="task-card-desc">${t.desc}</div>
           <div class="task-card-footer">
             <div class="task-card-badge">${t.assigned}</div>
             <div class="task-card-moves">
-              ${moveLeft}
-              ${moveRight}
+              ${window.safeHTML(moveLeft)}
+              ${window.safeHTML(moveRight)}
             </div>
           </div>
         </div>
       `;
     }).join('');
 
-    return `
+    return window.html`
       <div class="tasks-column">
         <div class="tasks-col-title" style="color: ${color}">${title} (${items.length})</div>
         <div class="task-list">
-          ${cardsHTML}
+          ${window.safeHTML(cardsHTML)}
         </div>
       </div>
     `;
@@ -1161,14 +1291,14 @@ window.AstraApps.dashboard = function(container, ui) {
       { label: 'Workflows', val: String(workflows.length), color: 'var(--color-amber)' },
       { label: 'Tokens Used', val: sv.tokensConsumed.toLocaleString(), color: 'var(--color-purple)' },
       { label: 'Focus Mode', val: currentFocus.toUpperCase(), color: 'var(--color-primary)' }
-    ].map(s => `
+    ].map(s => window.html`
       <div class="stat-card">
         <div class="stat-label">${s.label}</div>
         <div class="dashboard-card-val" style="color: ${s.color}">${s.val}</div>
       </div>
     `).join('');
 
-    const logsHTML = logs.slice(0, 10).map(l => `
+    const logsHTML = logs.slice(0, 10).map(l => window.html`
       <div class="audit-row">
         <span class="audit-action"><strong>[${l.agent}]</strong> ${l.action}</span>
         <span class="audit-time">${l.timestamp}</span>
@@ -1211,17 +1341,17 @@ window.AstraApps.dashboard = function(container, ui) {
     }
 
     if (insightsList.length === 0) {
-      conscienceHTML = `
+      conscienceHTML = window.html`
         <div class="conscience-card success">
           <div class="conscience-text">🟢 All systems active & codebase compiled cleanly. No conscience alerts found!</div>
         </div>
       `;
     } else {
       insightsList.forEach((ins, idx) => {
-        conscienceHTML += `
+        conscienceHTML += window.html`
           <div class="conscience-card ${ins.type}">
-            <div class="conscience-text">${window.escapeHTML(ins.text)}</div>
-            <button class="conscience-action-btn" data-act="${ins.action}">${window.escapeHTML(ins.actionLabel)}</button>
+            <div class="conscience-text">${ins.text}</div>
+            <button class="conscience-action-btn" data-act="${ins.action}">${ins.actionLabel}</button>
           </div>
         `;
       });
@@ -1231,13 +1361,13 @@ window.AstraApps.dashboard = function(container, ui) {
     const gitBranch = gitRepo ? gitRepo.branch : 'main';
     const latestWorkflow = workflows[0];
 
-    window.renderSafeHTML(container, `
+    window.renderSafeHTML(container, window.html`
       <div class="dashboard-app">
-        <div style="font-size: 16px; font-weight: 600; margin-bottom: -4px;">Welcome back, ${window.escapeHTML(sv.user)}</div>
-        <div style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 4px;">Astra OS active workspace: <strong>/Project_Astra</strong> (Branch: ${window.escapeHTML(gitBranch)})</div>
+        <div style="font-size: 16px; font-weight: 600; margin-bottom: -4px;">Welcome back, ${sv.user}</div>
+        <div style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 4px;">Astra OS active workspace: <strong>/Project_Astra</strong> (Branch: ${gitBranch})</div>
         
         <div class="dashboard-stats">
-          ${statsHTML}
+          ${window.safeHTML(statsHTML)}
         </div>
         
         <div class="dashboard-details-row" style="grid-template-columns: 1.2fr 1fr; margin-top: 4px;">
@@ -1276,7 +1406,7 @@ window.AstraApps.dashboard = function(container, ui) {
               <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;">Real-Time Scan</span>
             </div>
             <div class="conscience-list">
-              ${conscienceHTML}
+              ${window.safeHTML(conscienceHTML)}
             </div>
           </div>
         </div>
@@ -1285,19 +1415,19 @@ window.AstraApps.dashboard = function(container, ui) {
         <div class="dashboard-panel" style="flex-grow: 0; min-height: 120px;">
           <h3>Agent Activity Audit Log (Recent Events)</h3>
           <div class="logs-audit-list" style="height: 100px;">
-            ${logsHTML}
+            ${window.safeHTML(logsHTML)}
           </div>
         </div>
 
         <div class="dashboard-panel" style="flex-grow: 0; min-height: 120px;">
           <h3>Latest Workflow</h3>
-          ${latestWorkflow ? `
+          ${window.safeHTML(latestWorkflow ? window.html`
             <div style="display:flex;flex-direction:column;gap:6px;">
-              <div><strong>${window.escapeHTML(latestWorkflow.goal)}</strong></div>
-              <div style="font-size:11px;color:var(--text-secondary)">${window.escapeHTML(latestWorkflow.status)} • ${latestWorkflow.steps.length} steps • ${latestWorkflow.approvals.length} approvals</div>
+              <div><strong>${latestWorkflow.goal}</strong></div>
+              <div style="font-size:11px;color:var(--text-secondary)">${latestWorkflow.status} • ${latestWorkflow.steps.length} steps • ${latestWorkflow.approvals.length} approvals</div>
               <button class="btn btn-secondary" id="dashboard-open-workflow" style="width:max-content;">Open Workflow Console</button>
             </div>
-          ` : '<div style="color:var(--text-muted)">No workflows available.</div>'}
+          ` : '<div style="color:var(--text-muted)">No workflows available.</div>')}
         </div>
       </div>
     `);
@@ -1348,31 +1478,47 @@ window.AstraApps.workflow = function(container, ui) {
   function render() {
     const workflows = ui.state.workflows || [];
     const current = workflows[0];
+    const failures = ui.state.failureMemory || [];
+    const pendingApprovals = (ui.state.approvalsQueue || []).filter(appr => {
+      const workflowId = appr.metadata?.workflowId;
+      return current && workflowId === current.id;
+    });
     
-    const timelineHTML = current ? current.steps.map(step => `
+    const failureMemoryHTML = failures.length > 0 ? failures.map(f => window.html`
+      <div class="failure-memory-item" style="padding: 6px 8px; margin-bottom: 6px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 4px; font-size: 11px;">
+        <div style="display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 2px;">
+          <span style="color: #fca5a5;">⚠️ ${f.errorType}</span>
+          <span style="color: var(--text-muted); font-size: 9px;">${new Date(f.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</span>
+        </div>
+        <div style="color: var(--text-secondary); margin-bottom: 2px;"><strong>Goal:</strong> ${f.workflowGoal}</div>
+        <div style="color: var(--text-primary); font-family: monospace; font-size: 10px;">${f.details}</div>
+      </div>
+    `).join('') : '<div style="color: var(--text-muted); font-size: 11px; text-align: center; padding: 10px;">No historical failures recorded.</div>';
+    
+    const timelineHTML = current ? current.steps.map(step => window.html`
       <div class="workflow-step ${step.status || 'pending'}" style="border-left: 3px solid ${step.status === 'completed' ? '#10b981' : step.status === 'failed' ? '#ef4444' : 'var(--text-muted)'}; padding-left: 8px; margin-bottom: 12px; font-size: 11px;">
         <div class="workflow-step-head" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-          <strong style="font-size: 12px; color: var(--text-primary);">${window.escapeHTML(step.title || step.name || step.id)}</strong>
-          <span class="workflow-step-status" style="text-transform: uppercase; font-size: 9px; padding: 2px 6px; border-radius: 4px; background: ${step.status === 'completed' ? 'rgba(16,185,129,0.15)' : step.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.05)'}; color: ${step.status === 'completed' ? '#10b981' : step.status === 'failed' ? '#ef4444' : 'var(--text-muted)'};">${window.escapeHTML(step.status || 'pending')}</span>
+          <strong style="font-size: 12px; color: var(--text-primary);">${step.title || step.name || step.id}</strong>
+          <span class="workflow-step-status" style="text-transform: uppercase; font-size: 9px; padding: 2px 6px; border-radius: 4px; background: ${step.status === 'completed' ? 'rgba(16,185,129,0.15)' : step.status === 'failed' ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.05)'}; color: ${step.status === 'completed' ? '#10b981' : step.status === 'failed' ? '#ef4444' : 'var(--text-muted)'};">${step.status || 'pending'}</span>
         </div>
         <div class="workflow-step-meta" style="color: var(--text-secondary); margin-bottom: 4px; display: flex; justify-content: space-between;">
-          <span>Agent: <strong>${window.escapeHTML(step.assigned || 'System')}</strong> (Conf: ${step.confidence || 100}%)</span>
+          <span>Agent: <strong>${step.assigned || 'System'}</strong> (Conf: ${step.confidence || 100}%)</span>
           <span>${new Date(step.updatedAt || step.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
         </div>
-        ${step.reason ? `<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Reason:</strong> ${window.escapeHTML(step.reason)}</div>` : ''}
-        ${step.target ? `<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Target:</strong> <code>${window.escapeHTML(step.target)}</code></div>` : ''}
-        ${step.outcome ? `<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Outcome:</strong> ${window.escapeHTML(step.outcome)}</div>` : ''}
-        ${step.verification ? `<div style="margin-top: 2px; color: #34d399;"><strong>Verification:</strong> ${window.escapeHTML(step.verification)}</div>` : ''}
+        ${window.safeHTML(step.reason ? window.html`<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Reason:</strong> ${step.reason}</div>` : '')}
+        ${window.safeHTML(step.target ? window.html`<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Target:</strong> <code>${step.target}</code></div>` : '')}
+        ${window.safeHTML(step.outcome ? window.html`<div style="margin-top: 2px; color: var(--text-secondary);"><strong>Outcome:</strong> ${step.outcome}</div>` : '')}
+        ${window.safeHTML(step.verification ? window.html`<div style="margin-top: 2px; color: #34d399;"><strong>Verification:</strong> ${step.verification}</div>` : '')}
       </div>
     `).join('') : '<div class="workflow-empty">No workflows recorded yet.</div>';
 
-    const workflowCards = workflows.slice(0, 8).map(wf => `
+    const workflowCards = workflows.slice(0, 8).map(wf => window.html`
       <div class="workflow-card ${wf.status}">
         <div class="workflow-card-top">
-          <strong>${window.escapeHTML(wf.goal)}</strong>
-          <span>${window.escapeHTML(wf.status)}</span>
+          <strong>${wf.goal}</strong>
+          <span>${wf.status}</span>
         </div>
-        <div class="workflow-card-body">${window.escapeHTML(wf.prompt)}</div>
+        <div class="workflow-card-body">${wf.prompt}</div>
         <div class="workflow-card-foot">
           <span>${wf.steps.length} steps</span>
           <span>${wf.approvals.length} approvals</span>
@@ -1380,10 +1526,13 @@ window.AstraApps.workflow = function(container, ui) {
       </div>
     `).join('');
 
-    const approvalButtons = current ? `
+    const approvalButtons = current ? window.html`
       <div class="workflow-approval-panel">
-        <h4>Latest Workflow Approval</h4>
-        <div class="workflow-approval-copy">${window.escapeHTML(current.goal)}</div>
+        <h4>Workflow Decision</h4>
+        <div class="workflow-approval-copy">${current.goal}</div>
+        <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
+          Current status: <strong>${current.status}</strong> • Recorded approvals: <strong>${current.approvals.length}</strong>
+        </div>
         <div class="workflow-approval-actions">
           <button class="btn btn-primary btn-sm" id="wf-approve">Approve</button>
           <button class="btn btn-secondary btn-sm" id="wf-reject">Reject</button>
@@ -1391,25 +1540,43 @@ window.AstraApps.workflow = function(container, ui) {
       </div>
     ` : '<div class="workflow-empty">No active workflow to approve.</div>';
 
+    const pendingApprovalsHTML = pendingApprovals.length > 0
+      ? pendingApprovals.map(appr => {
+          const target = appr.metadata?.target || appr.args?.[0] || 'n/a';
+          return window.html`
+            <div style="padding: 8px 10px; border: 1px solid var(--border-glass); border-radius: 6px; background: var(--bg-glass-light); margin-top: 8px;">
+              <div style="display: flex; justify-content: space-between; gap: 10px; font-size: 11px; margin-bottom: 4px;">
+                <strong>${appr.callerId}</strong>
+                <span style="color: var(--text-muted);">${new Date(appr.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-secondary);"><strong>Call:</strong> <code>${appr.callName}</code></div>
+              <div style="font-size: 11px; color: var(--text-secondary);"><strong>Target:</strong> <code>${target}</code></div>
+              ${window.safeHTML(appr.details ? window.html`<div style="font-size: 11px; color: var(--text-secondary); margin-top: 3px;"><strong>Why approval is needed:</strong> ${appr.details}</div>` : '')}
+              <div style="font-size: 10px; color: var(--text-muted); margin-top: 6px;">
+                PID ${appr.metadata?.pid || 'n/a'} • ${appr.metadata?.user || 'unknown user'} (${appr.metadata?.role || 'unknown role'})
+              </div>
+            </div>
+          `;
+        }).join('')
+      : '<div class="workflow-empty">No pending syscall approvals linked to this workflow.</div>';
+
     const orchestrator = window.AstraAgentOrchestrator;
     const isPaused = orchestrator ? orchestrator.isPaused : false;
     const isActive = orchestrator ? orchestrator.activeWorkflow : false;
 
-    const controlButtons = current ? `
+    const controlButtons = current ? window.html`
       <div class="workflow-controls-panel" style="margin-top: 12px; padding: 10px; background: var(--bg-glass-light); border: 1px solid var(--border-glass); border-radius: 6px;">
         <h5 style="margin: 0 0 6px 0; font-size: 12px;">Execution & Recovery Controls</h5>
         <div style="display: flex; gap: 8px;">
-          ${isActive ? `
+          ${window.safeHTML(isActive ? window.html`
             <button class="btn btn-sm" id="wf-toggle-pause" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: var(--text-primary); cursor: pointer; padding: 4px 8px; border-radius: 4px; font-size: 11px;">
               ${isPaused ? '▶ Resume Agent' : '⏸ Pause Agent'}
             </button>
-          ` : `
-            ${current.status !== 'completed' && current.status !== 'failed' && current.status !== 'rejected' ? `
+          ` : (current.status !== 'completed' && current.status !== 'failed' && current.status !== 'rejected' ? window.html`
               <button class="btn btn-sm btn-primary" id="wf-resume-workflow" style="padding: 4px 8px; font-size: 11px;">
                 ▶ Resume Workflow
               </button>
-            ` : ''}
-          `}
+            ` : ''))}
           <button class="btn btn-sm btn-secondary" id="wf-rollback-last" style="padding: 4px 8px; font-size: 11px; background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3);">
             ↩ Rollback Last Step
           </button>
@@ -1417,7 +1584,7 @@ window.AstraApps.workflow = function(container, ui) {
       </div>
     ` : '';
 
-    window.renderSafeHTML(container, `
+    window.renderSafeHTML(container, window.html`
       <div class="workflow-app">
         <div class="workflow-header">
           <div>
@@ -1429,40 +1596,74 @@ window.AstraApps.workflow = function(container, ui) {
         <div class="workflow-grid">
           <div class="workflow-panel">
             <h4>Recent Workflows</h4>
-            <div class="workflow-card-list">${workflowCards || '<div class="workflow-empty">No workflows yet.</div>'}</div>
+            <div class="workflow-card-list">${window.safeHTML(workflowCards || '<div class="workflow-empty">No workflows yet.</div>')}</div>
+            
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; margin-bottom: 6px;">
+              <h4 style="margin: 0;">🧠 Planner Failure Memory</h4>
+              ${window.safeHTML(failures.length > 0 ? `<button class="btn btn-secondary btn-sm" id="wf-clear-failures" style="padding: 2px 6px; font-size: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); cursor: pointer;">Clear</button>` : '')}
+            </div>
+            <p style="color: var(--text-muted); font-size: 11px; margin: 0 0 8px 0; line-height: 1.3;">Avoidance logs compiled to prevent repeating historical mistakes.</p>
+            <div class="failure-memory-list" style="max-height: 140px; overflow-y: auto; padding-right: 4px;">
+              ${window.safeHTML(failureMemoryHTML)}
+            </div>
           </div>
           <div class="workflow-panel">
             <h4>Latest Workflow Steps</h4>
-            <div class="workflow-timeline" style="max-height: 240px; overflow-y: auto; padding-right: 4px;">${timelineHTML}</div>
-            ${approvalButtons}
-            ${controlButtons}
+            <div class="workflow-timeline" style="max-height: 240px; overflow-y: auto; padding-right: 4px;">${window.safeHTML(timelineHTML)}</div>
+            ${window.safeHTML(approvalButtons)}
+            <div style="margin-top: 12px;">
+              <h4 style="margin-bottom: 6px;">Pending Syscall Approvals</h4>
+              <div style="max-height: 190px; overflow-y: auto; padding-right: 4px;">
+                ${window.safeHTML(pendingApprovalsHTML)}
+              </div>
+            </div>
+            ${window.safeHTML(controlButtons)}
           </div>
         </div>
       </div>
     `);
 
     container.querySelector('#workflow-refresh')?.addEventListener('click', render);
+    container.querySelector('#wf-clear-failures')?.addEventListener('click', () => {
+      Astra.syscall('workflow:clearFailureMemory').then(() => {
+        ui.showToast('Failure Memory Cleared', 'Historical agent failures cleared.', 'success');
+        render();
+      });
+    });
     container.querySelector('#wf-approve')?.addEventListener('click', () => {
       if (!current) return;
-      ui.state.recordApproval(current.id, {
+      const approval = {
         actor: ui.state.currentSession.currentUser || 'User',
         decision: 'approved',
-        note: 'Approved from workflow console'
+        note: pendingApprovals.length > 0
+          ? `Approved from workflow console with ${pendingApprovals.length} pending syscall approval(s) visible`
+          : 'Approved from workflow console'
+      };
+      Astra.syscall('workflow:recordApproval', current.id, approval).then(() => {
+        Astra.syscall('workflow:update', current.id, { status: 'approved' }).then(() => {
+          ui.showToast('Workflow Approved', current.goal, 'success');
+          if (window.AstraAgentOrchestrator) {
+            window.AstraAgentOrchestrator.resumeWorkflow(current);
+          }
+          render();
+        });
       });
-      ui.state.updateWorkflow(current.id, { status: 'approved' });
-      ui.showToast('Workflow Approved', current.goal, 'success');
-      render();
     });
     container.querySelector('#wf-reject')?.addEventListener('click', () => {
       if (!current) return;
-      ui.state.recordApproval(current.id, {
+      const approval = {
         actor: ui.state.currentSession.currentUser || 'User',
         decision: 'rejected',
-        note: 'Rejected from workflow console'
+        note: pendingApprovals.length > 0
+          ? `Rejected from workflow console with ${pendingApprovals.length} pending syscall approval(s) visible`
+          : 'Rejected from workflow console'
+      };
+      Astra.syscall('workflow:recordApproval', current.id, approval).then(() => {
+        Astra.syscall('workflow:update', current.id, { status: 'rejected' }).then(() => {
+          ui.showToast('Workflow Rejected', current.goal, 'warning');
+          render();
+        });
       });
-      ui.state.updateWorkflow(current.id, { status: 'rejected' });
-      ui.showToast('Workflow Rejected', current.goal, 'warning');
-      render();
     });
     container.querySelector('#wf-toggle-pause')?.addEventListener('click', () => {
       if (orchestrator) {
